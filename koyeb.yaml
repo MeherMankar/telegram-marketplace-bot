@@ -1,0 +1,37 @@
+app:
+  name: telegram-marketplace
+services:
+  - name: telegram-marketplace
+    type: web
+    instance_type: nano
+    regions:
+      - fra
+    env:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: BUYER_BOT_TOKEN
+        scope: RUN_TIME
+        secret: true
+      - key: SELLER_BOT_TOKEN
+        scope: RUN_TIME
+        secret: true
+      - key: ADMIN_BOT_TOKEN
+        scope: RUN_TIME
+        secret: true
+      - key: MONGO_URI
+        scope: RUN_TIME
+        secret: true
+      - key: SESSION_ENCRYPTION_KEY
+        scope: RUN_TIME
+        secret: true
+
+      - key: ADMIN_USER_IDS
+        scope: RUN_TIME
+        secret: true
+    build:
+      type: buildpack
+      buildpack: python
+    run_command: python main.py
+    ports:
+      - port: 8000
+        protocol: http

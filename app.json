@@ -1,0 +1,57 @@
+{
+  "name": "Telegram Account Marketplace",
+  "description": "A production-ready Telegram bot system for buying and selling Telegram accounts",
+  "repository": "https://github.com/yourusername/TGACbuysellbot",
+  "logo": "https://telegram.org/img/t_logo.png",
+  "keywords": ["telegram", "bot", "marketplace", "python", "mongodb"],
+  "stack": "heroku-22",
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "env": {
+    "BUYER_BOT_TOKEN": {
+      "description": "Telegram bot token for buyer bot",
+      "required": true
+    },
+    "SELLER_BOT_TOKEN": {
+      "description": "Telegram bot token for seller bot", 
+      "required": true
+    },
+    "ADMIN_BOT_TOKEN": {
+      "description": "Telegram bot token for admin bot",
+      "required": false
+    },
+    "MONGO_URI": {
+      "description": "MongoDB connection string",
+      "value": "mongodb+srv://username:password@cluster.mongodb.net/telegram_marketplace"
+    },
+    "SESSION_ENCRYPTION_KEY": {
+      "description": "32-byte encryption key for session security",
+      "generator": "secret"
+    },
+
+    "ADMIN_USER_IDS": {
+      "description": "Comma-separated admin Telegram user IDs",
+      "value": "123456789,987654321"
+    },
+    "DEFAULT_PRICE_TABLE_JSON": {
+      "description": "JSON string with default prices",
+      "value": "{\"IN\": {\"2025\": 40, \"2024\": 30}, \"US\": {\"2025\": 50, \"2024\": 40}}"
+    },
+    "SIMULATE_UPI": {
+      "description": "Enable UPI payment simulation",
+      "value": "false"
+    },
+    "SIMULATE_CRYPTO": {
+      "description": "Enable crypto payment simulation", 
+      "value": "false"
+    }
+  },
+  "addons": [
+    {
+      "plan": "heroku-redis:mini"
+    }
+  ]
+}

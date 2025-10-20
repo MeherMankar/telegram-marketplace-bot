@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: telegram-marketplace
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: BUYER_BOT_TOKEN
+        sync: false
+      - key: SELLER_BOT_TOKEN
+        sync: false
+      - key: ADMIN_BOT_TOKEN
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: SESSION_ENCRYPTION_KEY
+        sync: false
+
+      - key: ADMIN_USER_IDS
+        sync: false
