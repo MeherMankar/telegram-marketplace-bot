@@ -152,8 +152,16 @@ Ready to start selling?
                 await self.edit_message(event, f"💸 **Request Payout**\n\n💰 **Available Balance: ${balance:.2f}**\n\nChoose your preferred payout method:", [[Button.inline("💳 UPI Payout", "payout_upi"), Button.inline("₿ Crypto Payout", "payout_crypto")], [Button.inline("🔙 Back", "back_to_main")]])
             elif data == "accept_tos":
                 await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$set": {"tos_accepted": datetime.utcnow()}})
-                await self.edit_message(event, "📤 **Upload Account**\n\nPlease send your session file or session string.", [[Button.inline("🔙 Back", "back_to_main")]])
-                await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$set": {"state": "awaiting_upload"}})
+                # Check what flow user came from
+                user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+                if user_doc and user_doc.get("temp_flow") == "otp":
+                    # Continue with OTP flow
+                    await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$unset": {"temp_flow": ""}})
+                    await self.handle_sell_via_otp(event, user)
+                else:
+                    # Continue with upload flow
+                    await self.edit_message(event, "📤 **Upload Account**\n\nPlease send your session file or session string.", [[Button.inline("🔙 Back", "back_to_main")]])
+                    await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$set": {"state": "awaiting_upload"}})
             elif data == "cancel_upload" or data == "cancel_otp":
                 await self.db_connection.users.update_one({"telegram_user_id": event.sender_id}, {"$unset": {"state": "", "temp_phone": "", "temp_otp": ""}})
                 buttons = create_main_menu(is_seller=True)
@@ -235,28 +243,8 @@ Ready to start selling?
                         )
                         return
             
-            # Check if ToS acceptance is required (admin managed)
-            general_settings = await self.get_general_settings()
-            if general_settings.get('tos_acceptance_required', True) and not user.tos_accepted:
-                tos_message = """
-📋 **Terms of Service**
-
-By selling an account via OTP, you agree to:
-
-1. You own the account being sold
-2. You will provide accurate phone number
-3. Account has no illegal activity history
-4. You authorize us to verify the account via OTP
-5. Payment will be processed after successful sale
-6. We may reject accounts that don't meet criteria
-7. Account ownership transfers to buyer upon sale
-
-**Do you accept these terms?**
-                """
-                
-                buttons = create_tos_keyboard()
-                await self.edit_message(event, tos_message, buttons)
-                return
+            # Skip ToS for OTP flow - show method selection directly
+            # ToS will be handled per method if needed
             
             # Show OTP selling method selection
             otp_message = """
@@ -329,7 +317,12 @@ Send your phone number:
     async def handle_text(self, event):
         """Handle text messages (session strings, phone numbers, OTP codes)"""
         try:
-            logger.info(f"[SELLER] Text message received from {event.sender_id}: {event.text[:50]}...")
+            logger.info(f"[SELLER] Text message received from {event.sender_id}: {str(event.text)[:50] if event.text else 'None'}...")
+            
+            if not event.text:
+                logger.warning(f"[SELLER] Empty text message from {event.sender_id}")
+                return
+            
             user = await self.get_or_create_user(event)
             
             if not user:
@@ -350,7 +343,12 @@ Send your phone number:
                 await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$unset": {"state": ""}})
                 processing_msg = await self.send_message(event.chat_id, "🔄 **Processing your session...**\n\nThis may take a few moments.")
                 
-                import_result = await self.session_importer.import_session(None, event.text)
+                session_text = str(event.text).strip() if event.text else ""
+                if not session_text:
+                    await self.client.edit_message(event.chat_id, processing_msg.id, "❌ **Invalid Session**\n\nPlease provide a valid session string.")
+                    return
+                
+                import_result = await self.session_importer.import_session(None, session_text)
                 if not import_result or not import_result.get("success"):
                     error_msg = import_result.get("error", "Unknown error") if import_result else "Import failed"
                     await self.client.edit_message(event.chat_id, processing_msg.id, f"❌ **Session Import Failed**\n\n{error_msg}")
@@ -383,16 +381,28 @@ Send your phone number:
                 asyncio.create_task(self.run_verification(account_id, event.chat_id))
             
             elif state == "awaiting_phone_otp":
-                logger.info(f"[SELLER] Processing phone number for OTP: {event.text} from {user.telegram_user_id}")
-                await self.process_phone_number(event, user, event.text.strip())
+                phone_text = str(event.text).strip() if event.text else ""
+                logger.info(f"[SELLER] Processing phone number for OTP: {phone_text} from {user.telegram_user_id}")
+                if not phone_text:
+                    await self.send_message(event.chat_id, "❌ **Invalid Phone Number**\n\nPlease provide a valid phone number.")
+                    return
+                await self.process_phone_number(event, user, phone_text)
             
             elif state == "awaiting_otp_code":
+                otp_text = str(event.text).strip() if event.text else ""
                 logger.info(f"[SELLER] Processing OTP code from {user.telegram_user_id}")
-                await self.process_otp_code(event, user, event.text.strip())
+                if not otp_text:
+                    await self.send_message(event.chat_id, "❌ **Invalid OTP**\n\nPlease provide a valid OTP code.")
+                    return
+                await self.process_otp_code(event, user, otp_text)
             
             elif state == "awaiting_2fa_password":
+                password_text = str(event.text).strip() if event.text else ""
                 logger.info(f"[SELLER] Processing 2FA password from {user.telegram_user_id}")
-                await self.process_2fa_password(event, user, event.text.strip())
+                if not password_text:
+                    await self.send_message(event.chat_id, "❌ **Invalid Password**\n\nPlease provide a valid 2FA password.")
+                    return
+                await self.process_2fa_password(event, user, password_text)
             
             elif state.startswith("payout_"):
                 method = state.split("_")[1]
@@ -401,18 +411,23 @@ Send your phone number:
                 user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
                 balance = user_doc.get("balance", 0.0) if user_doc else 0.0
                 
+                payout_details = str(event.text).strip() if event.text else ""
+                if not payout_details:
+                    await self.send_message(event.chat_id, "❌ **Invalid Details**\n\nPlease provide valid payment details.")
+                    return
+                
                 transaction_data = {
                     "user_id": user.telegram_user_id,
                     "type": "payout",
                     "amount": balance,
                     "payment_method": method,
                     "status": "pending",
-                    "payment_address": event.text.strip(),
+                    "payment_address": payout_details,
                     "created_at": datetime.utcnow()
                 }
                 
                 await self.db_connection.transactions.insert_one(transaction_data)
-                await self.send_message(event.chat_id, f"✅ **Payout Request Submitted**\n\n💰 **Amount:** ${balance:.2f}\n💳 **Method:** {method.upper()}\n📍 **Details:** {event.text.strip()}\n\n⏳ **Status:** Pending admin approval", buttons=[[Button.inline("🔙 Back", "back_to_main")]])
+                await self.send_message(event.chat_id, f"✅ **Payout Request Submitted**\n\n💰 **Amount:** ${balance:.2f}\n💳 **Method:** {method.upper()}\n📍 **Details:** {payout_details}\n\n⏳ **Status:** Pending admin approval", buttons=[[Button.inline("🔙 Back", "back_to_main")]])
             
         except Exception as e:
             logger.error(f"[SELLER] Text handler error for {event.sender_id}: {str(e)}")

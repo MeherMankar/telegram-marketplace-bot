@@ -110,6 +110,12 @@ class SessionImporter:
             # Convert to string session format
             dc_id, server_address, port, auth_key = session_data[0], session_data[1], session_data[2], session_data[3]
             
+            # Ensure all data is properly typed
+            if not isinstance(server_address, str):
+                server_address = str(server_address)
+            if not isinstance(auth_key, bytes):
+                auth_key = bytes(auth_key) if hasattr(auth_key, '__iter__') else b''
+            
             # Pack session data
             packed = struct.pack('>B', 1)  # Version
             packed += struct.pack('>B', dc_id)

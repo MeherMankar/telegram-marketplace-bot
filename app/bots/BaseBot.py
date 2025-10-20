@@ -178,7 +178,46 @@ class BaseBot:
             logger.error(f"[{self.bot_name}] Failed to get/create user for {event.sender_id}: {str(e)}")
             import traceback
             logger.error(f"[{self.bot_name}] Traceback: {traceback.format_exc()}")
-            raise
+            
+            try:
+                existing = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
+                if existing:
+                    return User(**{
+                        "_id": existing.get("_id"),
+                        "telegram_user_id": existing.get("telegram_user_id"),
+                        "username": existing.get("username"),
+                        "first_name": existing.get("first_name", 'User'),
+                        "last_name": existing.get("last_name"),
+                        "language_code": existing.get("language_code"),
+                        "is_admin": existing.get("is_admin", False),
+                        "balance": existing.get("balance", 0.0),
+                        "tos_accepted": existing.get("tos_accepted"),
+                        "created_at": existing.get("created_at", datetime.utcnow()),
+                        "upload_count_today": existing.get("upload_count_today", 0),
+                        "last_upload_date": existing.get("last_upload_date")
+                    })
+                
+                simple_user = {
+                    "telegram_user_id": event.sender_id,
+                    "username": getattr(event.sender, 'username', None),
+                    "first_name": getattr(event.sender, 'first_name', 'User'),
+                    "last_name": getattr(event.sender, 'last_name', None),
+                    "language_code": getattr(event.sender, 'lang_code', None),
+                    "is_admin": False,
+                    "balance": 0.0,
+                    "upload_count_today": 0,
+                    "created_at": datetime.utcnow(),
+                    "tos_accepted": None,
+                    "last_upload_date": None
+                }
+                
+                result = await self.db_connection.users.insert_one(simple_user)
+                simple_user["_id"] = result.inserted_id
+                return User(**simple_user)
+                
+            except Exception as final_error:
+                logger.error(f"[{self.bot_name}] Final fallback failed: {str(final_error)}")
+                raise Exception(f"Failed to create or find user {event.sender_id}")
     
     async def send_message(self, chat_id: int, message: str, buttons=None):
         """Send message with optional buttons"""
@@ -199,7 +238,8 @@ class BaseBot:
                 logger.info(f"[{self.bot_name}] Edit includes {len(buttons)} button rows")
             await event.edit(message, buttons=buttons)
         except Exception as e:
-            logger.error(f"[{self.bot_name}] Failed to edit message for {event.sender_id}: {str(e)}")
+            if "Content of the message was not modified" not in str(e):
+                logger.error(f"[{self.bot_name}] Failed to edit message for {event.sender_id}: {str(e)}")
     
     async def answer_callback(self, event, message: str = None, alert: bool = False):
         """Answer callback query"""
