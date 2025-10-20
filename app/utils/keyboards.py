@@ -86,7 +86,7 @@ def create_tos_keyboard() -> List[List[Button]]:
 def create_otp_method_keyboard() -> List[List[Button]]:
     """Create OTP method selection keyboard"""
     return [
-        [Button.inline("📱 Use Phone + OTP", "use_phone_otp")],
+        [Button.inline("📤 Upload Session", "upload_session"), Button.inline("📱 Use Phone + OTP", "use_phone_otp")],
         [Button.inline("🔙 Back to Menu", "back_to_main")]
     ]
 
