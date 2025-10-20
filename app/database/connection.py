@@ -47,7 +47,11 @@ class DatabaseConnection:
     async def connect(self):
         mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/telegram_marketplace')
         self.client = AsyncIOMotorClient(mongo_uri)
-        self.db = self.client.get_default_database()
+        # Use explicit database name as fallback
+        try:
+            self.db = self.client.get_default_database()
+        except:
+            self.db = self.client.telegram_marketplace
         
         # Collections
         self.users = self.db.users
