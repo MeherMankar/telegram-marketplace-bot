@@ -115,7 +115,7 @@ Ready to start selling?
             user = await self.get_or_create_user(event)
             
             if data == "upload_account":
-                await self.handle_sell_via_otp(event, user)
+                await self.handle_upload_account(event, user)
             elif data == "sell_via_otp":
                 logger.info(f"[SELLER] User {user.telegram_user_id} clicked 'Sell via OTP'")
                 await self.handle_sell_via_otp(event, user)
@@ -428,9 +428,12 @@ Send your phone number:
             logger.info(f"[SELLER] User {user.telegram_user_id} current state: {current_state}")
             
             if not user_doc or user_doc.get("state") != "awaiting_upload":
-                logger.info(f"[SELLER] Document ignored - user not in awaiting_upload state")
-                await self.send_message(event.chat_id, "❌ Please click 'Upload Session' first to upload your session file.")
-                return
+                logger.info(f"[SELLER] Document received without awaiting_upload state - auto-setting state")
+                # Auto-set the state and process the document
+                await self.db_connection.users.update_one(
+                    {"telegram_user_id": user.telegram_user_id},
+                    {"$set": {"state": "awaiting_upload"}}
+                )
             
             file_name = "unknown"
             if event.document.attributes:
