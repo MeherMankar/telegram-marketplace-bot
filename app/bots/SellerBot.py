@@ -187,6 +187,12 @@ Ready to start selling?
             elif data == "back_to_main":
                 logger.info(f"[SELLER] User {user.telegram_user_id} clicked 'Back to Main'")
                 await self.handle_start(event)
+            elif data == "seller_stats":
+                await self.handle_seller_stats(event, user)
+            elif data == "my_rating":
+                await self.handle_my_rating(event, user)
+            elif data == "help":
+                await self.handle_help(event)
             else:
                 logger.warning(f"[SELLER] Unknown callback data: '{data}' from user {event.sender_id}")
             
@@ -823,4 +829,104 @@ Send your phone number:
             
         except Exception as e:
             logger.error(f"Upload account handler error: {str(e)}")
+            await self.edit_message(event, "❌ An error occurred. Please try again.")
+    
+    async def handle_seller_stats(self, event, user):
+        """Handle seller stats"""
+        try:
+            total_accounts = await self.db_connection.accounts.count_documents({"seller_id": user.telegram_user_id})
+            approved_accounts = await self.db_connection.accounts.count_documents({"seller_id": user.telegram_user_id, "status": "approved"})
+            sold_accounts = await self.db_connection.accounts.count_documents({"seller_id": user.telegram_user_id, "status": "sold"})
+            
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+            balance = user_doc.get("balance", 0.0) if user_doc else 0.0
+            
+            stats_message = f"""📊 **Your Seller Statistics**
+
+📤 **Total Uploaded:** {total_accounts}
+✅ **Approved:** {approved_accounts}
+💰 **Sold:** {sold_accounts}
+💵 **Current Balance:** ${balance:.2f}
+
+📈 **Success Rate:** {(approved_accounts/total_accounts*100) if total_accounts > 0 else 0:.1f}%
+💎 **Conversion Rate:** {(sold_accounts/approved_accounts*100) if approved_accounts > 0 else 0:.1f}%"""
+            
+            await self.edit_message(event, stats_message, [[Button.inline("🔙 Back", "back_to_main")]])
+            
+        except Exception as e:
+            logger.error(f"Seller stats handler error: {str(e)}")
+            await self.edit_message(event, "❌ An error occurred. Please try again.")
+    
+    async def handle_my_rating(self, event, user):
+        """Handle my rating"""
+        try:
+            total_accounts = await self.db_connection.accounts.count_documents({"seller_id": user.telegram_user_id})
+            approved_accounts = await self.db_connection.accounts.count_documents({"seller_id": user.telegram_user_id, "status": "approved"})
+            sold_accounts = await self.db_connection.accounts.count_documents({"seller_id": user.telegram_user_id, "status": "sold"})
+            
+            if total_accounts == 0:
+                rating = 0.0
+                rating_text = "No Rating"
+            else:
+                success_rate = approved_accounts / total_accounts
+                conversion_rate = sold_accounts / approved_accounts if approved_accounts > 0 else 0
+                rating = (success_rate * 0.7 + conversion_rate * 0.3) * 5
+                rating_text = f"{rating:.1f}/5.0 ⭐"
+            
+            rating_message = f"""⭐ **Your Seller Rating**
+
+🌟 **Current Rating:** {rating_text}
+
+**Rating Factors:**
+• Account approval rate: {(approved_accounts/total_accounts*100) if total_accounts > 0 else 0:.1f}%
+• Sales conversion rate: {(sold_accounts/approved_accounts*100) if approved_accounts > 0 else 0:.1f}%
+• Account quality scores
+• Customer feedback
+
+**Tips to Improve:**
+• Upload high-quality accounts
+• Ensure accounts have clean history
+• Provide accurate information
+• Maintain good account standards"""
+            
+            await self.edit_message(event, rating_message, [[Button.inline("🔙 Back", "back_to_main")]])
+            
+        except Exception as e:
+            logger.error(f"My rating handler error: {str(e)}")
+            await self.edit_message(event, "❌ An error occurred. Please try again.")
+    
+    async def handle_help(self, event):
+        """Handle help"""
+        try:
+            help_message = """❓ **Help & Support**
+
+**How to Sell Accounts:**
+1. Click 'Upload Account' or 'Sell via OTP'
+2. Provide session file/string or phone number
+3. Complete verification process
+4. Wait for admin approval
+5. Get paid when account sells!
+
+**Upload Methods:**
+📤 **Session Upload**: Upload .session files or session strings
+📱 **Phone + OTP**: Verify ownership via phone number
+
+**Account Requirements:**
+✅ Must be your own account
+✅ Clean history (no spam/bans)
+✅ Active and accessible
+✅ No illegal activity
+
+**Payment:**
+💰 Earnings added to your balance
+💸 Request payout via UPI or Crypto
+⏰ Payouts processed within 24 hours
+
+**Need More Help?**
+Contact our support team for assistance."""
+            
+            await self.edit_message(event, help_message, [[Button.inline("🔙 Back", "back_to_main")]])
+            
+        except Exception as e:
+            logger.error(f"Help handler error: {str(e)}")
             await self.edit_message(event, "❌ An error occurred. Please try again.")
