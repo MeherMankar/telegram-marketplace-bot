@@ -7,6 +7,7 @@ from app.services import PaymentService, OtpService
 from app.services.UpiPaymentService import UpiPaymentService
 from app.services.ListingService import ListingService
 from app.services.AccountTransferService import AccountTransferService
+from app.services.AccountLoginService import AccountLoginService
 from app.utils import create_main_menu, create_country_menu, create_year_menu, create_payment_keyboard, create_otp_verification_keyboard
 import logging
 import os
@@ -20,6 +21,7 @@ class BuyerBot(BaseBot):
         self.payment_service = PaymentService(db_connection)
         self.listing_service = ListingService(db_connection)
         self.transfer_service = AccountTransferService(db_connection)
+        self.account_login_service = AccountLoginService(db_connection, api_id, api_hash)
         self.otp_service = otp_service
         self.marketing_service = marketing_service
         self.social_service = social_service
@@ -855,10 +857,23 @@ Click below to proceed with secure payment:"""
                 "🔍 **Verifying OTP...**\n\nPlease wait while we complete the account transfer."
             )
             
-            # Complete account transfer
-            transfer_result = await self.otp_service.complete_account_transfer(
-                user.telegram_user_id,
-                otp_code
+            # Transfer account to buyer using AccountLoginService
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+            transaction_id = user_doc.get("temp_transaction")
+            
+            if not transaction_id:
+                await self.client.edit_message(event.chat_id, processing_msg.id, "❌ Session expired. Please start over.")
+                return
+            
+            # Get transaction to find account
+            transaction = await self.db_connection.transactions.find_one({"_id": transaction_id})
+            if not transaction:
+                await self.client.edit_message(event.chat_id, processing_msg.id, "❌ Transaction not found.")
+                return
+            
+            # Transfer account ownership
+            transfer_result = await self.account_login_service.transfer_account_to_buyer(
+                str(transaction["account_id"]), user.telegram_user_id
             )
             
             if transfer_result['success']:

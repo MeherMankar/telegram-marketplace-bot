@@ -64,6 +64,9 @@ async def main():
         # Initialize bots with time sync fix
         await asyncio.sleep(1)  # Time sync fix
         
+        # Create sessions directory
+        os.makedirs('sessions', exist_ok=True)
+        
         # Seller Bot with all services
         seller_bot = SellerBot(
             api_id=api_id,
@@ -118,10 +121,14 @@ async def main():
         tasks.append(seller_bot.run_until_disconnected())
         logger.info("Seller bot started")
         
+        await asyncio.sleep(2)  # Prevent session conflicts
+        
         # Start buyer bot
         await buyer_bot.start()
         tasks.append(buyer_bot.run_until_disconnected())
         logger.info("Buyer bot started")
+        
+        await asyncio.sleep(2)  # Prevent session conflicts
         
         # Start admin bot if configured
         if admin_bot:
@@ -131,15 +138,17 @@ async def main():
         
         logger.info("All bots are running. Press Ctrl+C to stop.")
         
-        # Start web server for Render (free tier requirement)
-        app = web.Application()
-        app.router.add_get('/', lambda request: web.Response(text="Telegram Bot is running!"))
-        app.router.add_get('/health', lambda request: web.Response(text="OK"))
-        
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8000)))
-        await site.start()
+        # Optional web server for health checks (only if PORT is set)
+        if os.getenv('PORT'):
+            app = web.Application()
+            app.router.add_get('/', lambda request: web.Response(text="Telegram Bot is running!"))
+            app.router.add_get('/health', lambda request: web.Response(text="OK"))
+            
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8000)))
+            await site.start()
+            logger.info(f"Health check server started on port {os.getenv('PORT', 8000)}")
         
         # Run all bots concurrently
         await asyncio.gather(*tasks)

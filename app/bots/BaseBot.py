@@ -29,7 +29,9 @@ class BaseBot:
         # Add delay for time sync
         await asyncio.sleep(1)
         
-        self.client = TelegramClient(f'{self.bot_name}_bot', self.api_id, self.api_hash,
+        # Create unique session file path for each bot
+        session_name = f'sessions/{self.bot_name.lower()}_bot'
+        self.client = TelegramClient(session_name, self.api_id, self.api_hash,
                                    system_version="4.16.30-vxCUSTOM",
                                    device_model="Desktop",
                                    app_version="1.0")

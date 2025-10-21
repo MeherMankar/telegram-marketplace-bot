@@ -10,23 +10,27 @@ from app.services.VerificationService import VerificationService
 from app.services.PaymentService import PaymentService
 
 from app.utils.SessionImporter import SessionImporter
+from app.utils.UniversalSessionConverter import UniversalSessionConverter
+from app.services.OtpService import OtpService
+from app.services.AccountLoginService import AccountLoginService
 from app.utils import encrypt_session, create_main_menu, create_tos_keyboard, create_otp_method_keyboard, create_otp_verification_keyboard
 import logging
 
 logger = logging.getLogger(__name__)
 
 class SellerBot(BaseBot):
-    def __init__(self, api_id: int, api_hash: str, bot_token: str, db_connection, otp_service, bulk_service, ml_service, security_service, social_service):
+    def __init__(self, api_id: int, api_hash: str, bot_token: str, db_connection, otp_service=None, bulk_service=None, ml_service=None, security_service=None, social_service=None):
         super().__init__(api_id, api_hash, bot_token, db_connection, "Seller")
         self.verification_service = VerificationService(db_connection)
         self.payment_service = PaymentService(db_connection)
-        self.otp_service = otp_service
+        self.otp_service = otp_service or OtpService(api_id, api_hash)
         self.bulk_service = bulk_service
         self.ml_service = ml_service
         self.security_service = security_service
         self.social_service = social_service
         self.session_importer = SessionImporter()
         self.settings_manager = SettingsManager(db_connection)
+        self.account_login_service = AccountLoginService(db_connection, api_id, api_hash)
     
     async def get_upload_limits(self):
         """Get upload limits from admin settings"""
@@ -254,6 +258,7 @@ Choose how you want to provide your account:
 
 **📤 Upload Session**: If you have session files/strings
 **📱 Phone + OTP**: Verify ownership via your phone number
+**📦 TData Archive**: Upload Telegram Desktop data
 
 **Phone + OTP Process:**
 1. Enter your account's phone number
@@ -268,6 +273,12 @@ Choose how you want to provide your account:
 2. Automated verification checks
 3. Admin review and approval
 4. Account listed for sale
+
+**TData Process:**
+1. Export TData from Telegram Desktop
+2. Create ZIP archive of tdata folder
+3. Upload ZIP file to bot
+4. Automatic conversion and verification
             """
             
             buttons = create_otp_method_keyboard()
@@ -348,33 +359,17 @@ Send your phone number:
                     await self.client.edit_message(event.chat_id, processing_msg.id, "❌ **Invalid Session**\n\nPlease provide a valid session string.")
                     return
                 
-                import_result = await self.session_importer.import_session(None, session_text)
-                if not import_result or not import_result.get("success"):
-                    error_msg = import_result.get("error", "Unknown error") if import_result else "Import failed"
-                    await self.client.edit_message(event.chat_id, processing_msg.id, f"❌ **Session Import Failed**\n\n{error_msg}")
+                # Use AccountLoginService to login and store
+                login_result = await self.account_login_service.login_and_store_account(
+                    session_text, user.telegram_user_id, "auto"
+                )
+                
+                if not login_result.get("success"):
+                    error_msg = login_result.get("error", "Login failed")
+                    await self.client.edit_message(event.chat_id, processing_msg.id, f"❌ **Account Login Failed**\n\n{error_msg}")
                     return
                 
-                account_data = {
-                    "seller_id": user.telegram_user_id,
-                    "session_string": import_result["session_string"],
-                    "status": AccountStatus.PENDING,
-                    "created_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow(),
-                    "obtained_via": "upload"
-                }
-                
-                if "account_info" in import_result:
-                    info = import_result["account_info"]
-                    account_data.update({
-                        "telegram_account_id": info.get("id"),
-                        "username": info.get("username"),
-                        "first_name": info.get("first_name"),
-                        "last_name": info.get("last_name"),
-                        "phone_number": info.get("phone")
-                    })
-                
-                result = await self.db_connection.accounts.insert_one(account_data)
-                account_id = str(result.inserted_id)
+                account_id = login_result["account_id"]
                 
                 await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **Session imported successfully!**\n\n🔍 Starting automated verification...")
                 import asyncio
@@ -386,6 +381,9 @@ Send your phone number:
                 if not phone_text:
                     await self.send_message(event.chat_id, "❌ **Invalid Phone Number**\n\nPlease provide a valid phone number.")
                     return
+                
+                # Clear state before processing
+                await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$unset": {"state": ""}})
                 await self.process_phone_number(event, user, phone_text)
             
             elif state == "awaiting_otp_code":
@@ -457,41 +455,31 @@ Send your phone number:
                         file_name = attr.file_name
                         break
             
+            # Check if it's a TData archive
+            if file_name.lower().endswith(('.zip', '.rar', '.7z')) and 'tdata' in file_name.lower():
+                temp_file = tempfile.mktemp(suffix='.zip')
+                await event.download_media(temp_file)
+                await self.handle_tdata_archive(event, user, temp_file)
+                return
+            
             temp_file = tempfile.mktemp(suffix=os.path.splitext(file_name)[1])
             await event.download_media(temp_file)
             
             await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$unset": {"state": ""}})
             processing_msg = await self.send_message(event.chat_id, "🔄 **Processing your session...**\n\nThis may take a few moments.")
             
-            import_result = await self.session_importer.import_session(temp_file, None)
+            # Use AccountLoginService to login and store
+            login_result = await self.account_login_service.login_and_store_account(
+                temp_file, user.telegram_user_id, "auto"
+            )
             os.unlink(temp_file)
             
-            if not import_result or not import_result.get("success"):
-                error_msg = import_result.get("error", "Unknown error") if import_result else "Import failed"
-                await self.client.edit_message(event.chat_id, processing_msg.id, f"❌ **Session Import Failed**\n\n{error_msg}")
+            if not login_result.get("success"):
+                error_msg = login_result.get("error", "Login failed")
+                await self.client.edit_message(event.chat_id, processing_msg.id, f"❌ **Account Login Failed**\n\n{error_msg}")
                 return
             
-            account_data = {
-                "seller_id": user.telegram_user_id,
-                "session_string": import_result["session_string"],
-                "status": AccountStatus.PENDING,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
-                "obtained_via": "upload"
-            }
-            
-            if "account_info" in import_result:
-                info = import_result["account_info"]
-                account_data.update({
-                    "telegram_account_id": info.get("id"),
-                    "username": info.get("username"),
-                    "first_name": info.get("first_name"),
-                    "last_name": info.get("last_name"),
-                    "phone_number": info.get("phone")
-                })
-            
-            result = await self.db_connection.accounts.insert_one(account_data)
-            account_id = str(result.inserted_id)
+            account_id = login_result["account_id"]
             
             await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **Session imported successfully!**\n\n🔍 Starting automated verification...")
             import asyncio
@@ -501,17 +489,63 @@ Send your phone number:
             logger.error(f"Document handler error: {str(e)}")
             await self.send_message(event.chat_id, "❌ Failed to process file. Please try again.")
     
+    async def handle_tdata_archive(self, event, user, archive_path):
+        """Handle TData archive upload"""
+        try:
+            import zipfile
+            import tempfile
+            import shutil
+            
+            processing_msg = await self.send_message(event.chat_id, "📦 **Processing TData Archive...**\n\nExtracting and converting...")
+            
+            # Create temp directory for extraction
+            with tempfile.TemporaryDirectory() as temp_dir:
+                extract_path = os.path.join(temp_dir, "tdata")
+                
+                # Extract archive
+                if archive_path.lower().endswith('.zip'):
+                    with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+                        zip_ref.extractall(extract_path)
+                else:
+                    await self.client.edit_message(event.chat_id, processing_msg.id, "❌ **Unsupported Archive Format**\n\nOnly ZIP files are supported for TData.")
+                    return
+                
+                # Look for tdata folder in extracted content
+                tdata_path = None
+                for root, dirs, files in os.walk(extract_path):
+                    if 'key_datas' in files:
+                        tdata_path = root
+                        break
+                
+                if not tdata_path:
+                    await self.client.edit_message(event.chat_id, processing_msg.id, "❌ **Invalid TData Archive**\n\nNo valid TData structure found in archive.")
+                    return
+                
+                # Use AccountLoginService to login and store TData
+                login_result = await self.account_login_service.login_and_store_account(
+                    tdata_path, user.telegram_user_id, "tdata"
+                )
+                
+                if not login_result.get("success"):
+                    error_msg = login_result.get("error", "Login failed")
+                    await self.client.edit_message(event.chat_id, processing_msg.id, f"❌ **TData Login Failed**\n\n{error_msg}")
+                    return
+                
+                account_id = login_result["account_id"]
+                
+                await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **TData imported successfully!**\n\n🔍 Starting automated verification...")
+                import asyncio
+                asyncio.create_task(self.run_verification(account_id, event.chat_id))
+                
+        except Exception as e:
+            logger.error(f"TData archive handler error: {str(e)}")
+            await self.send_message(event.chat_id, "❌ Failed to process TData archive. Please try again.")
+    
     async def process_phone_number(self, event, user, phone_number):
         """Process phone number and send OTP"""
         try:
             user_id = event.sender_id
             logger.info(f"[SELLER] Processing phone number {phone_number} for user {user_id}")
-            
-            # Clear user state
-            await self.db_connection.users.update_one(
-                {"telegram_user_id": user_id},
-                {"$unset": {"state": ""}}
-            )
             
             # Validate phone number format
             if not phone_number.startswith('+') or len(phone_number) < 10:
@@ -532,16 +566,16 @@ Send your phone number:
                 await self.send_message(event.chat_id, "❌ Failed to send message. Please try again.")
                 return
             
-            # Send OTP
-            logger.info(f"[SELLER] Calling OTP service for {phone_number}, user {user_id}")
+            # Send OTP using AccountLoginService
+            logger.info(f"[SELLER] Sending OTP for {phone_number}, user {user_id}")
             try:
-                otp_result = await self.otp_service.verify_account_ownership(phone_number, user_id)
-                logger.info(f"[SELLER] OTP service result: {otp_result}")
+                otp_result = await self.account_login_service.login_with_phone_otp(phone_number, user_id)
+                logger.info(f"[SELLER] OTP result: {otp_result}")
             except Exception as otp_error:
                 logger.error(f"OTP service error: {otp_error}")
                 import traceback
                 logger.error(f"OTP service traceback: {traceback.format_exc()}")
-                await self.send_message(event.chat_id, f"❌ OTP service error: {str(otp_error)}")
+                await self.client.edit_message(event.chat_id, processing_msg.id, f"❌ **OTP Service Error**\n\n{str(otp_error)}\n\nPlease try session upload instead.")
                 return
             
             if not otp_result:
@@ -569,10 +603,15 @@ Send your phone number:
                 else:
                     await self.send_message(event.chat_id, success_message)
                 
-                # Set user state for OTP input
+                # Store OTP session data
                 await self.db_connection.users.update_one(
                     {"telegram_user_id": user_id},
-                    {"$set": {"state": "awaiting_otp_code", "temp_phone": phone_number}}
+                    {"$set": {
+                        "state": "awaiting_otp_code", 
+                        "temp_phone": phone_number,
+                        "phone_code_hash": otp_result["phone_code_hash"],
+                        "client_session": otp_result["client_session"]
+                    }}
                 )
             else:
                 error_msg = otp_result.get('error', 'Unknown error occurred')
@@ -605,43 +644,51 @@ Send your phone number:
             
             logger.info(f"Processing OTP code for user {user_id}")
             
-            # Verify OTP
-            verification_result = await self.otp_service.verify_otp_and_create_session(
-                user_id, 
-                otp_code
+            # Get stored OTP data
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
+            if not user_doc or not user_doc.get("phone_code_hash"):
+                await self.client.edit_message(event.chat_id, processing_msg.id, "❌ **Session Expired**\n\nPlease start over.")
+                return
+            
+            phone_number = user_doc["temp_phone"]
+            phone_code_hash = user_doc["phone_code_hash"]
+            client_session = user_doc["client_session"]
+            
+            # Verify OTP and store account
+            verification_result = await self.account_login_service.verify_otp_and_store(
+                phone_number, otp_code, phone_code_hash, client_session, user_id
             )
             
             logger.info(f"OTP verification result: {verification_result}")
             
-            if verification_result.get('success') and verification_result.get('step') == 'complete':
-                logger.info("OTP verification successful, clearing user state")
+            if verification_result.get('success'):
                 # Clear user state
                 await self.db_connection.users.update_one(
                     {"telegram_user_id": user_id},
-                    {"$unset": {"state": "", "temp_phone": ""}}
+                    {"$unset": {"state": "", "temp_phone": "", "phone_code_hash": "", "client_session": ""}}
                 )
                 
-                # Process the account like a session upload
-                await self.process_otp_account(event, user, verification_result, processing_msg.id if processing_msg else None)
+                account_id = verification_result["account_id"]
+                account_info = verification_result["account_info"]
                 
-            elif verification_result.get('requires_password') or verification_result.get('step') == '2fa':
-                tfa_msg = "🔐 **Two-Factor Authentication Required**\n\nYour account has 2FA enabled. Please enter your password:\n\n**Note:** This password will be provided to the buyer for account access."
-                if processing_msg:
-                    await self.client.edit_message(
-                        event.chat_id,
-                        processing_msg.id,
-                        tfa_msg,
-                        buttons=[[Button.inline("❌ Cancel", "cancel_otp")]]
-                    )
-                else:
-                    await self.send_message(event.chat_id, tfa_msg)
+                success_msg = f"✅ **Account Added Successfully!**\n\n👤 **Username:** @{account_info.get('username', 'N/A')}\n📱 **Phone:** {account_info.get('phone', 'Hidden')}\n🎆 **Premium:** {'Yes' if account_info.get('premium') else 'No'}\n\n🔍 **Starting verification...**"
+                
+                await self.client.edit_message(event.chat_id, processing_msg.id, success_msg)
+                
+                # Start verification
+                import asyncio
+                asyncio.create_task(self.run_verification(account_id, event.chat_id))
+                
+            elif verification_result.get('requires_password'):
+                tfa_msg = "🔐 **Two-Factor Authentication Required**\n\nYour account has 2FA enabled. Please enter your password:"
+                await self.client.edit_message(event.chat_id, processing_msg.id, tfa_msg, buttons=[[Button.inline("❌ Cancel", "cancel_otp")]])
                 
                 # Set state for 2FA password
                 await self.db_connection.users.update_one(
                     {"telegram_user_id": user_id},
-                    {"$set": {"state": "awaiting_2fa_password", "temp_otp": otp_code}}
+                    {"$set": {"state": "awaiting_2fa_password", "temp_otp_code": otp_code}}
                 )
-                return  # Don't process account yet, wait for 2FA
+                return
                 
             else:
                 await self.client.edit_message(
@@ -658,51 +705,43 @@ Send your phone number:
         """Process 2FA password"""
         try:
             user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
-            temp_otp = user_doc.get("temp_otp")
+            temp_otp_code = user_doc.get("temp_otp_code")
+            phone_number = user_doc.get("temp_phone")
+            phone_code_hash = user_doc.get("phone_code_hash")
+            client_session = user_doc.get("client_session")
             
-            if not temp_otp:
+            if not all([temp_otp_code, phone_number, phone_code_hash, client_session]):
                 await self.send_message(event.chat_id, "❌ Session expired. Please start over.")
                 return
             
-            # Show processing message
-            processing_msg = await self.send_message(
-                event.chat_id,
-                "🔐 **Verifying Password...**\n\nPlease wait while we verify your 2FA password."
-            )
+            processing_msg = await self.send_message(event.chat_id, "🔐 **Verifying Password...**")
             
             # Verify with password
-            verification_result = await self.otp_service.verify_otp_and_create_session(
-                user.telegram_user_id, 
-                temp_otp, 
-                password
+            verification_result = await self.account_login_service.verify_otp_and_store(
+                phone_number, temp_otp_code, phone_code_hash, client_session, user.telegram_user_id, password
             )
             
-            if verification_result.get('success') and verification_result.get('step') == 'complete':
-                # Store 2FA password in verification result for account processing
-                verification_result['tfa_password'] = password
-                
+            if verification_result.get('success'):
                 # Clear user state
                 await self.db_connection.users.update_one(
                     {"telegram_user_id": user.telegram_user_id},
-                    {"$unset": {"state": "", "temp_phone": "", "temp_otp": ""}}
+                    {"$unset": {"state": "", "temp_phone": "", "temp_otp_code": "", "phone_code_hash": "", "client_session": ""}}
                 )
                 
-                # Process the account
-                if processing_msg:
-                    await self.process_otp_account(event, user, verification_result, processing_msg.id)
-                else:
-                    await self.process_otp_account(event, user, verification_result, None)
+                account_id = verification_result["account_id"]
+                account_info = verification_result["account_info"]
+                
+                success_msg = f"✅ **Account Added with 2FA!**\n\n👤 **Username:** @{account_info.get('username', 'N/A')}\n📱 **Phone:** {account_info.get('phone', 'Hidden')}\n🔐 **2FA:** Enabled\n\n🔍 **Starting verification...**"
+                
+                await self.client.edit_message(event.chat_id, processing_msg.id, success_msg)
+                
+                # Start verification
+                import asyncio
+                asyncio.create_task(self.run_verification(account_id, event.chat_id))
                 
             else:
-                error_msg = f"❌ **Password Verification Failed**\n\n{verification_result.get('error', 'Unknown error')}\n\nPlease try again."
-                if processing_msg:
-                    await self.client.edit_message(
-                        event.chat_id,
-                        processing_msg.id,
-                        error_msg
-                    )
-                else:
-                    await self.send_message(event.chat_id, error_msg)
+                error_msg = f"❌ **Password Verification Failed**\n\n{verification_result.get('error', 'Unknown error')}"
+                await self.client.edit_message(event.chat_id, processing_msg.id, error_msg)
             
         except Exception as e:
             logger.error(f"Process 2FA password error: {str(e)}")
@@ -837,7 +876,7 @@ Send your phone number:
         try:
             await self.edit_message(
                 event, 
-                "📤 **Upload Account**\n\nPlease send your session file or session string.", 
+                "📤 **Upload Account**\n\nPlease send:\n• Session file (.session)\n• Session string (text)\n• TData archive (.zip)\n\nSupported formats: Telethon, Pyrogram, TData", 
                 [[Button.inline("🔙 Back", "back_to_main")]]
             )
             await self.db_connection.users.update_one(

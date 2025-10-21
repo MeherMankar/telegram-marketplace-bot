@@ -9,6 +9,26 @@ logger = logging.getLogger(__name__)
 class SocialService:
     def __init__(self, db_connection):
         self.db = db_connection
+        self.devices = [
+            {"model": "Samsung SM-G973F", "system": "Android 10", "version": "8.4.1"},
+            {"model": "Google Pixel 6", "system": "Android 13", "version": "8.7.1"},
+            {"model": "OnePlus 9 Pro", "system": "Android 12", "version": "8.6.0"},
+        ]
+        
+    def get_random_device(self):
+        """Get random device for snooping"""
+        import random
+        return random.choice(self.devices)
+        
+    async def snoop_device_info(self, account_data: dict):
+        """Snoop device information for account"""
+        device = self.get_random_device()
+        return {
+            "device_model": device["model"],
+            "system_version": device["system"], 
+            "app_version": device["version"],
+            "snooped": True
+        }
     
     async def add_user_rating(self, rater_id: int, rated_user_id: int, 
                             transaction_id: str, rating: int, review: str = "") -> Dict[str, Any]:
