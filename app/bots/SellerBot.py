@@ -742,28 +742,41 @@ Send your phone number:
             seller_proxy = None
             user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
             
-            # Only use proxy if not skipped
-            if user_doc and not user_doc.get("skip_proxy") and user_doc.get("temp_proxy_host"):
-                # Get proxy from seller_proxies collection
-                from app.models import SellerProxyManager
-                proxy_manager = SellerProxyManager(self.db_connection)
-                proxy_doc = await self.db_connection.seller_proxies.find_one({
-                    "seller_id": user_id,
-                    "proxy_host": user_doc["temp_proxy_host"]
-                })
-                if proxy_doc:
-                    seller_proxy = {
-                        "proxy_type": proxy_doc["proxy_type"],
-                        "addr": proxy_doc["proxy_host"],
-                        "port": proxy_doc["proxy_port"],
-                        "username": proxy_doc.get("proxy_username"),
-                        "password": proxy_doc.get("proxy_password")
-                    }
-                    logger.info(f"[SELLER] Using seller proxy: {seller_proxy['addr']}:{seller_proxy['port']}")
+            # Only use proxy if not skipped and proxy exists
+            if user_doc and not user_doc.get("skip_proxy"):
+                # Check if temp_proxy_host exists (just added)
+                if user_doc.get("temp_proxy_host"):
+                    proxy_doc = await self.db_connection.seller_proxies.find_one({
+                        "seller_id": user_id,
+                        "proxy_host": user_doc["temp_proxy_host"]
+                    })
+                    if proxy_doc:
+                        seller_proxy = {
+                            "proxy_type": proxy_doc["proxy_type"],
+                            "addr": proxy_doc["proxy_host"],
+                            "port": proxy_doc["proxy_port"],
+                            "username": proxy_doc.get("proxy_username"),
+                            "password": proxy_doc.get("proxy_password")
+                        }
+                        logger.info(f"[SELLER] Using seller proxy: {seller_proxy['addr']}:{seller_proxy['port']}")
+                # Also check if user has any existing proxy
+                elif not seller_proxy:
+                    proxy_doc = await self.db_connection.seller_proxies.find_one({"seller_id": user_id})
+                    if proxy_doc:
+                        seller_proxy = {
+                            "proxy_type": proxy_doc["proxy_type"],
+                            "addr": proxy_doc["proxy_host"],
+                            "port": proxy_doc["proxy_port"],
+                            "username": proxy_doc.get("proxy_username"),
+                            "password": proxy_doc.get("proxy_password")
+                        }
+                        logger.info(f"[SELLER] Using existing seller proxy: {seller_proxy['addr']}:{seller_proxy['port']}")
             
             # Use shared OTP service instance with seller proxy
-            print(f"[SELLER] Calling OTP service with proxy={seller_proxy}...")
-            logger.info(f"[SELLER] Calling verify_account_ownership for {phone_number} with proxy={seller_proxy}")
+            print(f"[SELLER] Calling OTP service with proxy={'Yes' if seller_proxy else 'None'}...")
+            if seller_proxy:
+                logger.info(f"[SELLER] Proxy details: {seller_proxy['proxy_type']}://{seller_proxy['addr']}:{seller_proxy['port']}")
+            logger.info(f"Calling verify_account_ownership for {phone_number} with proxy={'Yes' if seller_proxy else 'None'}")
             otp_result = await self.otp_service.verify_account_ownership(phone_number, user_id, seller_proxy)
             print(f"[SELLER] OTP result: {otp_result.get('success')}")
             logger.info(f"[SELLER] OTP result: {otp_result}")
@@ -1215,13 +1228,13 @@ Send your phone number:
             
             # Get proxy if account uses one
             proxy = None
-            if account_doc.get("uses_proxy") and account_doc.get("proxy_host"):
-                seller_id = account_doc.get("seller_id")
-                proxy_host = account_doc.get("proxy_host")
-                if seller_id and proxy_host:
+            seller_id = account_doc.get("seller_id")
+            if seller_id:
+                # Try to get proxy from account first
+                if account_doc.get("uses_proxy") and account_doc.get("proxy_host"):
                     proxy_doc = await self.db_connection.seller_proxies.find_one({
                         "seller_id": seller_id,
-                        "proxy_host": proxy_host
+                        "proxy_host": account_doc.get("proxy_host")
                     })
                     if proxy_doc:
                         proxy = {
@@ -1231,7 +1244,19 @@ Send your phone number:
                             "username": proxy_doc.get("proxy_username"),
                             "password": proxy_doc.get("proxy_password")
                         }
-                        logger.info(f"Using seller proxy for verification: {proxy['addr']}:{proxy['port']}")
+                        logger.info(f"Using account proxy for verification: {proxy['addr']}:{proxy['port']}")
+                # Fallback: get any proxy for this seller
+                if not proxy:
+                    proxy_doc = await self.db_connection.seller_proxies.find_one({"seller_id": seller_id})
+                    if proxy_doc:
+                        proxy = {
+                            "proxy_type": proxy_doc["proxy_type"],
+                            "addr": proxy_doc["proxy_host"],
+                            "port": proxy_doc["proxy_port"],
+                            "username": proxy_doc.get("proxy_username"),
+                            "password": proxy_doc.get("proxy_password")
+                        }
+                        logger.info(f"Using seller's default proxy for verification: {proxy['addr']}:{proxy['port']}")
             
             # 3. Run full verification (30+ checks) with proxy
             verification_result = await self.verification_service.verify_account(account_doc, proxy)
