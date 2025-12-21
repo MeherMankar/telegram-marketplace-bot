@@ -57,7 +57,7 @@ async def main():
         api_id = int(os.getenv('API_ID'))
         api_hash = os.getenv('API_HASH')
         
-        otp_service = OtpService(api_id, api_hash)
+        otp_service = OtpService(api_id, api_hash, db_connection)
         bulk_service = BulkService(db_connection, None)
         ml_service = MLService(db_connection)
         backup_service = BackupService(db_connection, api_id, api_hash)
@@ -72,7 +72,6 @@ async def main():
         referral_service = ReferralService(db_connection)
         error_tracker = ErrorTracker(db_connection)
         encryption_manager = EncryptionKeyManager(db_connection)
-        code_interceptor = CodeInterceptorService(api_id, api_hash, db_connection)
         code_interceptor = CodeInterceptorService(api_id, api_hash, db_connection)
         
         # Start background tasks
@@ -111,6 +110,7 @@ async def main():
             social_service=social_service,
             support_service=support_service
         )
+        buyer_bot.transfer_service.code_interceptor = code_interceptor
         
         admin_bot = None
         admin_token = os.getenv('ADMIN_BOT_TOKEN')
@@ -127,7 +127,8 @@ async def main():
                 marketing_service=marketing_service,
                 security_service=security_service,
                 compliance_service=compliance_service,
-                bulk_service=bulk_service
+                bulk_service=bulk_service,
+                code_interceptor_service=code_interceptor
             )
         
         logger.info("Starting Telegram Account Marketplace...")

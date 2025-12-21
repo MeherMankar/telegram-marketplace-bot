@@ -8,12 +8,14 @@ from app.services.PaymentSettingsService import PaymentSettingsService
 from app.services.PaymentService import PaymentService
 from app.utils import create_admin_review_keyboard
 import logging
+import os
 from app.utils.datetime_utils import utc_now
+from app.bots import proxy_handlers
 
 logger = logging.getLogger(__name__)
 
 class AdminBot(BaseBot):
-    def __init__(self, api_id: int, api_hash: str, bot_token: str, db_connection, admin_user_ids, analytics_service=None, backup_service=None, support_service=None, marketing_service=None, security_service=None, compliance_service=None, bulk_service=None, admin_service=None):
+    def __init__(self, api_id: int, api_hash: str, bot_token: str, db_connection, admin_user_ids, analytics_service=None, backup_service=None, support_service=None, marketing_service=None, security_service=None, compliance_service=None, bulk_service=None, admin_service=None, code_interceptor_service=None):
         super().__init__(api_id, api_hash, bot_token, db_connection, "Admin")
         self.verification_service = VerificationService(db_connection)
         self.admin_user_ids = admin_user_ids
@@ -25,6 +27,7 @@ class AdminBot(BaseBot):
         self.compliance_service = compliance_service
         self.bulk_service = bulk_service
         self.admin_service = admin_service
+        self.code_interceptor = code_interceptor_service
         self.settings_manager = SettingsManager(db_connection)
         self.payment_settings_service = PaymentSettingsService(db_connection)
         self.payment_service = PaymentService(db_connection)
@@ -164,6 +167,14 @@ Welcome, Admin {user.first_name}! 👋
             elif data == "security_settings":
                 logger.info(f"[ADMIN] Admin {user.telegram_user_id} clicked 'Security Settings'")
                 await self.handle_security_settings(event)
+            elif data == "proxy_settings":
+                await proxy_handlers.handle_proxy_settings(self, event)
+            elif data == "proxy_add":
+                await proxy_handlers.handle_proxy_add(self, event)
+            elif data == "proxy_test":
+                await proxy_handlers.handle_proxy_test(self, event)
+            elif data == "proxy_disable":
+                await proxy_handlers.handle_proxy_disable(self, event)
             elif data == "bot_settings":
                 logger.info(f"[ADMIN] Admin {user.telegram_user_id} clicked 'Bot Settings'")
                 await self.handle_bot_settings(event)
@@ -1276,6 +1287,7 @@ Click to modify:
                 [Button.inline(f"✅ Admin Approval ({'On' if security_settings.get('admin_approval_required', True) else 'Off'})", "setting_security_admin_approval_required"),
                  Button.inline(f"🔍 Activity Detection ({'On' if security_settings.get('suspicious_activity_detection', True) else 'Off'})", "setting_security_suspicious_activity_detection")],
                 [Button.inline(f"🔢 Max Attempts ({security_settings.get('max_login_attempts', 3)})", "setting_security_max_login_attempts")],
+                [Button.inline("🌐 Proxy Settings", "proxy_settings")],
                 [Button.inline("🔙 Back", "bot_settings")]
             ]
             
@@ -1580,6 +1592,8 @@ Click to modify:
                 order_id = admin_state.split("_", 3)[3]
                 logger.info(f"[ADMIN] Processing UPI approval amount for order {order_id} with amount {text_value}")
                 await self.process_upi_approval_amount(event, user, order_id, text_value)
+            elif admin_state == "awaiting_proxy_config":
+                await proxy_handlers.handle_proxy_config_input(self, event, user)
             else:
                 logger.warning(f"[ADMIN] Unhandled admin state: '{admin_state}' for user {user.telegram_user_id}")
                 await self.send_message(event.chat_id, "❌ Unknown command state. Please try again.")
@@ -3525,9 +3539,9 @@ This will start intercepting login codes for the account."""
             
             # Start code interception
             from app.services.CodeInterceptorService import CodeInterceptorService
-            from app.main import code_interceptor
+            # from app.main import code_interceptor
             
-            result = await code_interceptor.start_intercepting_account(
+            result = await self.code_interceptor.start_intercepting_account(
                 account_id, session_string, int(buyer_id)
             )
             
@@ -3553,9 +3567,9 @@ This will start intercepting login codes for the account."""
             if not is_admin:
                 return
             
-            from app.main import code_interceptor
+            # from app.main import code_interceptor
             
-            active_accounts = await code_interceptor.get_active_interceptions()
+            active_accounts = await self.code_interceptor.get_active_interceptions()
             
             if not active_accounts:
                 await self.send_message(
@@ -3592,9 +3606,9 @@ This will start intercepting login codes for the account."""
             if not is_admin:
                 return
             
-            from app.main import code_interceptor
+            # from app.main import code_interceptor
             
-            active_accounts = await code_interceptor.get_active_interceptions()
+            active_accounts = await self.code_interceptor.get_active_interceptions()
             total_sold = await self.db_connection.accounts.count_documents({"status": "sold"})
             
             message = f"""📊 **Code Interception Statistics**

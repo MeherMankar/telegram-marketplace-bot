@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 class OtpService:
     """Handle OTP verification and session creation"""
     
-    def __init__(self, api_id: int, api_hash: str):
+    def __init__(self, api_id: int, api_hash: str, db_connection=None):
         self.api_id = api_id
         self.api_hash = api_hash
+        self.db_connection = db_connection
         self.pending_sessions = {}  # {user_id: {phone, client, sent_code}}
         
     async def verify_account_ownership(self, phone_number: str, user_id: int) -> dict:
@@ -31,6 +32,13 @@ class OtpService:
                 del self.pending_sessions[user_id]
                 logger.info(f"Cleaned up old session for user {user_id}")
             
+            # Get proxy configuration
+            proxy = None
+            if self.db_connection:
+                from app.models import ProxyManager
+                proxy_manager = ProxyManager(self.db_connection)
+                proxy = await proxy_manager.get_proxy_dict()
+            
             # Device snooping for realistic sessions
             devices = [
                 {"model": "Samsung SM-G973F", "system": "Android 10", "version": "8.4.1"},
@@ -40,11 +48,12 @@ class OtpService:
             import random
             device = random.choice(devices)
             
-            # Create temporary client for OTP with device info
+            # Create temporary client for OTP with device info and proxy
             client = TelegramClient(
                 StringSession(),
                 self.api_id,
                 self.api_hash,
+                proxy=proxy,
                 connection_retries=2,
                 retry_delay=1,
                 device_model=device["model"],

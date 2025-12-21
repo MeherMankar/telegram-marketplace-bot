@@ -77,6 +77,8 @@ class DatabaseConnection:
         self.metrics = self.db.metrics
         self.referrals = self.db.referrals
         self.bot_settings = self.db.bot_settings
+        self.proxy_settings = self.db.proxy_settings
+        self.seller_proxies = self.db.seller_proxies
         
         await self._create_indexes()
     

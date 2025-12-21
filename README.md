@@ -10,6 +10,7 @@ A production-ready Telegram bot system for buying and selling Telegram accounts 
 - **Admin Review**: Manual approval workflow for quality control
 - **Balance Management**: Track earnings and request payouts
 - **Rate Limiting**: Prevent abuse with daily upload limits
+- **Proxy System**: Per-seller proxy support (1 proxy per 10 accounts) to prevent account freezing
 
 ### Buyer Bot
 - **Marketplace Browsing**: Browse by country and creation year
@@ -97,6 +98,7 @@ See [IMPROVEMENTS_SUMMARY.md](IMPROVEMENTS_SUMMARY.md) for details on recent enh
 - ✅ Payment timeout handling
 - ✅ Error tracking and monitoring
 - ✅ Encryption key rotation
+- ✅ **Proxy Support** (SOCKS5, HTTP, MTProto) - See [PROXY_SUPPORT.md](PROXY_SUPPORT.md)
 
 **Medium Priority:**
 - ✅ Caching service (80% less DB load)
@@ -104,11 +106,13 @@ See [IMPROVEMENTS_SUMMARY.md](IMPROVEMENTS_SUMMARY.md) for details on recent enh
 - ✅ Referral system for user acquisition
 - ✅ Account preview for buyers
 - ✅ Message queue ready
+- ✅ **Code Interception** - Automatic login code forwarding to buyers
 
 **Documentation:**
 - [IMPROVEMENTS.md](IMPROVEMENTS.md) - Full feature documentation
 - [INTEGRATION_EXAMPLE.py](INTEGRATION_EXAMPLE.py) - Code examples
 - [IMPROVEMENTS_SUMMARY.md](IMPROVEMENTS_SUMMARY.md) - Quick overview
+- [PROXY_SUPPORT.md](PROXY_SUPPORT.md) - Proxy configuration guide
 
 ## 🔧 Configuration
 
@@ -213,6 +217,7 @@ python scripts/test_session_upload.py
 - **Audit Logging**: Complete action history for compliance
 - **Terms of Service**: Required acceptance before upload
 - **Error Tracking**: Comprehensive error monitoring and logging
+- **Proxy Support**: Route all traffic through SOCKS5/HTTP/MTProto proxies for privacy
 
 ## ⚡ Performance Features
 
@@ -396,6 +401,7 @@ MIT License - see LICENSE file for details.
 3. **Admin Review**: Use admin bot to review and approve
 4. **Verify Listing**: Check buyer bot for new listing
 5. **Test Purchase**: Complete a test purchase flow
+6. **Configure Proxy** (Optional): `python scripts/setup_proxy.py` or via AdminBot > Security Settings > Proxy Settings
 
 ### Production Deployment
 1. **Configure Environment**: Set all required environment variables

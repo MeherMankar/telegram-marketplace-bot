@@ -25,8 +25,14 @@ class BaseBot:
         
         await asyncio.sleep(1)
         
+        # Get proxy configuration
+        from app.models import ProxyManager
+        proxy_manager = ProxyManager(self.db_connection)
+        proxy = await proxy_manager.get_proxy_dict()
+        
         session_name = f'sessions/{self.bot_name.lower()}_bot'
         self.client = TelegramClient(session_name, self.api_id, self.api_hash,
+                                   proxy=proxy,
                                    system_version="4.16.30-vxCUSTOM",
                                    device_model="Desktop",
                                    app_version="1.0")
@@ -36,6 +42,8 @@ class BaseBot:
         self.register_handlers()
         
         logger.info(f"{self.bot_name} bot started and handlers registered")
+        if proxy:
+            logger.info(f"{self.bot_name} using proxy: {proxy.get('proxy_type')}://{proxy.get('addr')}:{proxy.get('port')}")
     
     async def run_until_disconnected(self):
         """Keep the bot running"""

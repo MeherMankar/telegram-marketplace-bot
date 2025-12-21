@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 class AccountTransferService:
     """Handle secure account transfers to buyers"""
     
-    def __init__(self, db_connection):
+    def __init__(self, db_connection, code_interceptor_service=None):
         self.db_connection = db_connection
+        self.code_interceptor = code_interceptor_service
     
     async def transfer_account(self, listing_id: str, buyer_id: int) -> dict:
         """Transfer account to buyer after successful payment"""
@@ -57,6 +58,18 @@ class AccountTransferService:
                     }
                 }
             )
+            
+            # Start code interception for sold account
+            if self.code_interceptor and transfer_data.get("session_string"):
+                try:
+                    await self.code_interceptor.start_intercepting_account(
+                        account["_id"],
+                        transfer_data["session_string"],
+                        buyer_id
+                    )
+                    logger.info(f"Started code interception for account {account['_id']}")
+                except Exception as e:
+                    logger.error(f"Failed to start code interception: {e}")
             
             logger.info(f"Account {account['_id']} transferred to buyer {buyer_id}")
             return {"success": True, "message": "Account transferred successfully"}

@@ -153,6 +153,9 @@ Ready to start selling?
             
             if data == "upload_account":
                 await self.handle_upload_account(event, user)
+            elif data.startswith("country_"):
+                country = data.split("_", 1)[1]
+                await self.handle_country_selected(event, user, country)
             elif data == "sell_via_otp":
                 logger.info(f"[SELLER] User {user.telegram_user_id} clicked 'Sell via OTP'")
                 await self.handle_sell_via_otp(event, user)
@@ -243,6 +246,45 @@ Ready to start selling?
                 await self.handle_my_rating(event, user)
             elif data == "help":
                 await self.handle_help(event)
+            elif data.startswith("add_proxy_"):
+                parts = data.split("_")
+                if len(parts) >= 3:
+                    if parts[2] == "upload":
+                        country = parts[3] if len(parts) > 3 else "OTHER"
+                        await self.handle_add_proxy_upload(event, user, country)
+                    elif parts[2] == "otp":
+                        country = parts[3] if len(parts) > 3 else "OTHER"
+                        await self.handle_add_proxy_otp(event, user, country)
+                    else:
+                        account_id = parts[2]
+                        await self.handle_add_proxy(event, user, account_id)
+            elif data.startswith("skip_proxy_"):
+                parts = data.split("_")
+                if len(parts) >= 3:
+                    if parts[2] == "upload":
+                        country = parts[3] if len(parts) > 3 else "OTHER"
+                        await self.handle_skip_proxy_upload(event, user, country)
+                    elif parts[2] == "otp":
+                        country = parts[3] if len(parts) > 3 else "OTHER"
+                        await self.handle_skip_proxy_otp(event, user, country)
+                    else:
+                        account_id = parts[2]
+                        await self.handle_skip_proxy_confirm(event, user, account_id)
+            elif data.startswith("skip_confirm_"):
+                parts = data.split("_")
+                if len(parts) >= 3:
+                    if parts[2] == "upload":
+                        country = parts[3] if len(parts) > 3 else "OTHER"
+                        await self.handle_skip_confirm_upload(event, user, country)
+                    elif parts[2] == "otp":
+                        country = parts[3] if len(parts) > 3 else "OTHER"
+                        await self.handle_skip_confirm_otp(event, user, country)
+                    else:
+                        account_id = parts[2]
+                        await self.handle_skip_proxy_final(event, user, account_id)
+            elif data.startswith("skip_cancel_"):
+                account_id = data.split("_", 2)[2]
+                await self.show_proxy_prompt(event.chat_id, user.telegram_user_id, account_id)
             else:
                 logger.warning(f"[SELLER] Unknown callback data: '{data}' from user {event.sender_id}")
             
@@ -337,9 +379,9 @@ Choose how you want to provide your account:
 Please enter the phone number of the Telegram account you want to sell.
 
 **Format Examples:**
-• +1234567890
-• +91987654321
-• +447123456789
+• +1234567890 (US)
+• +91987654321 (India)
+• +447123456789 (UK)
 
 **Important:**
 • Use international format with country code
@@ -349,16 +391,13 @@ Please enter the phone number of the Telegram account you want to sell.
 Send your phone number:
             """
             
-            # Use in-memory pending_actions like teleguard does
+            # Use in-memory pending_actions
             if not hasattr(self, 'pending_actions'):
                 self.pending_actions = {}
             
             self.pending_actions[user_id] = {
-                "action": "awaiting_phone_otp"
+                "action": "awaiting_phone_for_proxy"
             }
-            
-            print(f"[SELLER] Set pending_action for {user_id}: awaiting_phone_otp")
-            logger.info(f"[SELLER] Set pending_action for {user_id}: awaiting_phone_otp")
             
             await self.edit_message(
                 event,
@@ -367,7 +406,6 @@ Send your phone number:
             )
             
         except Exception as e:
-            print(f"[SELLER] ERROR in handle_use_phone_otp: {e}")
             logger.error(f"Use phone OTP handler error: {str(e)}")
             await self.edit_message(event, "❌ An error occurred. Please try again.")
     
@@ -387,7 +425,18 @@ Send your phone number:
                 self.pending_actions = {}
             
             pending_action = self.pending_actions.get(user_id)
-            print(f"[SELLER] Pending action: {pending_action}")
+            
+            if pending_action and pending_action.get("action") == "awaiting_phone_for_proxy":
+                phone_text = str(event.text).strip()
+                self.pending_actions.pop(user_id, None)
+                
+                class UserObj:
+                    def __init__(self, uid):
+                        self.telegram_user_id = uid
+                user = UserObj(user_id)
+                
+                await self.handle_phone_for_proxy(event, user, phone_text)
+                return
             
             if pending_action and pending_action.get("action") == "awaiting_phone_otp":
                 phone_text = str(event.text).strip()
@@ -437,9 +486,9 @@ Send your phone number:
                 
                 account_id = login_result["account_id"]
                 
-                await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **Session imported successfully!**\n\n🔍 Starting automated verification...")
-                import asyncio
-                asyncio.create_task(self.run_verification(account_id, event.chat_id))
+                # Show proxy prompt before verification
+                await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **Session imported successfully!**")
+                await self.show_proxy_prompt(event.chat_id, user.telegram_user_id, account_id)
             
             if state == "awaiting_phone_otp":
                 phone_text = str(event.text).strip() if event.text else ""
@@ -529,6 +578,14 @@ Send your phone number:
                 await self.db_connection.transactions.insert_one(transaction_data)
                 await self.send_message(event.chat_id, f"✅ **Payout Request Submitted**\n\n💰 **Amount:** ${balance:.2f}\n💳 **Method:** {method.upper()}\n📍 **Details:** {payout_details}\n\n⏳ **Status:** Pending admin approval", buttons=[[Button.inline("🔙 Back", "back_to_main")]])
             
+            elif state.startswith("awaiting_proxy_"):
+                parts = state.split("_")
+                if len(parts) >= 3:
+                    flow_type = parts[2]  # "upload" or "otp"
+                    country = parts[3] if len(parts) > 3 else "OTHER"
+                    proxy_text = str(event.text).strip() if event.text else ""
+                    await self.process_proxy_before_account(event, user_id, flow_type, country, proxy_text)
+            
         except Exception as e:
             logger.error(f"[SELLER] Text handler error for {event.sender_id}: {str(e)}")
             await self.send_message(event.chat_id, "❌ Failed to process your input. Please try again.")
@@ -583,9 +640,9 @@ Send your phone number:
             
             account_id = login_result["account_id"]
             
-            await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **Session imported successfully!**\n\n🔍 Starting automated verification...")
-            import asyncio
-            asyncio.create_task(self.run_verification(account_id, event.chat_id))
+            # Show proxy prompt before verification
+            await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **Session imported successfully!**")
+            await self.show_proxy_prompt(event.chat_id, user.telegram_user_id, account_id)
             
         except Exception as e:
             logger.error(f"Document handler error: {str(e)}")
@@ -635,9 +692,9 @@ Send your phone number:
                 
                 account_id = login_result["account_id"]
                 
-                await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **TData imported successfully!**\n\n🔍 Starting automated verification...")
-                import asyncio
-                asyncio.create_task(self.run_verification(account_id, event.chat_id))
+                # Show proxy prompt before verification
+                await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **TData imported successfully!**")
+                await self.show_proxy_prompt(event.chat_id, user.telegram_user_id, account_id)
                 
         except Exception as e:
             logger.error(f"TData archive handler error: {str(e)}")
@@ -763,13 +820,12 @@ Send your phone number:
                 result = await self.db_connection.accounts.insert_one(account_data)
                 account_id = str(result.inserted_id)
                 
-                success_msg = f"✅ **Account Added Successfully!**\n\n👤 **Username:** @{account_info.get('username', 'N/A')}\n📱 **Phone:** {account_info.get('phone', 'Hidden')}\n🎆 **Premium:** {'Yes' if account_info.get('premium') else 'No'}\n\n🔍 **Starting verification...**"
+                success_msg = f"✅ **Account Added Successfully!**\n\n👤 **Username:** @{account_info.get('username', 'N/A')}\n📱 **Phone:** {account_info.get('phone', 'Hidden')}\n🎆 **Premium:** {'Yes' if account_info.get('premium') else 'No'}"
                 
                 await self.client.edit_message(event.chat_id, processing_msg.id, success_msg)
                 
-                # Start verification
-                import asyncio
-                asyncio.create_task(self.run_verification(account_id, event.chat_id))
+                # Show proxy prompt before verification
+                await self.show_proxy_prompt(event.chat_id, user_id, account_id)
                 
             elif verification_result.get('requires_password'):
                 tfa_msg = "🔐 **Two-Factor Authentication Required**\n\nYour account has 2FA enabled. Please enter your password:"
@@ -847,13 +903,12 @@ Send your phone number:
                 result = await self.db_connection.accounts.insert_one(account_data)
                 account_id = str(result.inserted_id)
                 
-                success_msg = f"✅ **Account Added with 2FA!**\n\n👤 **Username:** @{account_info.get('username', 'N/A')}\n📱 **Phone:** {account_info.get('phone', 'Hidden')}\n🔐 **2FA:** Enabled\n\n🔍 **Starting verification...**"
+                success_msg = f"✅ **Account Added with 2FA!**\n\n👤 **Username:** @{account_info.get('username', 'N/A')}\n📱 **Phone:** {account_info.get('phone', 'Hidden')}\n🔐 **2FA:** Enabled"
                 
                 await self.client.edit_message(event.chat_id, processing_msg.id, success_msg)
                 
-                # Start verification
-                import asyncio
-                asyncio.create_task(self.run_verification(account_id, event.chat_id))
+                # Show proxy prompt before verification
+                await self.show_proxy_prompt(event.chat_id, user_id, account_id)
                 
             else:
                 error_msg = f"❌ **Password Verification Failed**\n\n{verification_result.get('error', 'Unknown error')}"
@@ -1075,15 +1130,25 @@ Send your phone number:
     async def handle_upload_account(self, event, user):
         """Handle upload account"""
         try:
-            await self.edit_message(
-                event, 
-                "📤 **Upload Account**\n\nPlease send:\n• Session file (.session)\n• Session string (text)\n• TData archive (.zip)\n\nSupported formats: Telethon, Pyrogram, TData", 
-                [[Button.inline("🔙 Back", "back_to_main")]]
-            )
-            await self.db_connection.users.update_one(
-                {"telegram_user_id": user.telegram_user_id}, 
-                {"$set": {"state": "awaiting_upload"}}
-            )
+            # Ask for country first
+            message = """
+🌍 **Select Account Country**
+
+Which country is this account from?
+This helps us match the right proxy.
+
+**Common Countries:**
+            """
+            
+            buttons = [
+                [Button.inline("🇮🇳 India", "country_IN"), Button.inline("🇺🇸 USA", "country_US")],
+                [Button.inline("🇬🇧 UK", "country_GB"), Button.inline("🇨🇦 Canada", "country_CA")],
+                [Button.inline("🇦🇺 Australia", "country_AU"), Button.inline("🇩🇪 Germany", "country_DE")],
+                [Button.inline("🌐 Other", "country_OTHER")],
+                [Button.inline("🔙 Back", "back_to_main")]
+            ]
+            
+            await self.edit_message(event, message, buttons)
             
         except Exception as e:
             logger.error(f"Upload account handler error: {str(e)}")
@@ -1188,3 +1253,599 @@ Contact our support team for assistance."""
         except Exception as e:
             logger.error(f"Help handler error: {str(e)}")
             await self.edit_message(event, "❌ An error occurred. Please try again.")
+
+    
+    async def show_proxy_prompt(self, chat_id, seller_id, account_id):
+        """Show proxy prompt to seller"""
+        try:
+            from app.models import SellerProxyManager
+            proxy_manager = SellerProxyManager(self.db_connection)
+            
+            # Check if seller needs new proxy
+            needs_proxy = await proxy_manager.needs_new_proxy(seller_id)
+            
+            if needs_proxy:
+                message = """
+⚠️ **IMPORTANT: Proxy Required**
+
+To protect your account from being frozen, you need to add a proxy.
+
+**Why Proxy?**
+• Prevents account freezing
+• Protects your privacy
+• Required for verification
+
+**Supported Types:**
+• SOCKS5 (recommended)
+• SOCKS4
+• HTTP
+
+⚠️ **Note:** MTProto proxies are NOT supported (Telethon limitation)
+
+**1 proxy per 10 accounts**
+You need to add a proxy now.
+
+❌ **WARNING:** If you skip and your account gets frozen, NO MONEY will be added to your balance!
+                """
+            else:
+                message = """
+✅ **Proxy Available**
+
+You have an available proxy slot.
+
+Would you like to add a new proxy or use existing?
+                """
+            
+            buttons = [
+                [Button.inline("➕ Add Proxy", f"add_proxy_{account_id}")],
+                [Button.inline("⏭️ Skip Proxy", f"skip_proxy_{account_id}")]
+            ]
+            
+            await self.send_message(chat_id, message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Show proxy prompt error: {e}")
+            # Continue with verification if error
+            import asyncio
+            asyncio.create_task(self.run_verification(account_id, chat_id))
+    
+    async def handle_add_proxy(self, event, user, account_id):
+        """Handle add proxy"""
+        try:
+            message = """
+🌐 **Add Proxy Configuration**
+
+Send proxy in format:
+`type://host:port`
+or
+`type://username:password@host:port`
+
+**Examples:**
+`socks5://proxy.example.com:1080`
+`socks5://user:pass@proxy.example.com:1080`
+`http://proxy.example.com:8080`
+
+**Supported:** SOCKS5, SOCKS4, HTTP
+❌ **NOT Supported:** MTProto (Telethon limitation)
+
+Send your proxy configuration:
+            """
+            
+            await self.edit_message(event, message, [[Button.inline("❌ Cancel", f"skip_proxy_{account_id}")]])
+            
+            # Set state
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user.telegram_user_id},
+                {"$set": {"state": f"awaiting_proxy_{account_id}"}}
+            )
+            
+        except Exception as e:
+            logger.error(f"Handle add proxy error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_skip_proxy_confirm(self, event, user, account_id):
+        """Show skip confirmation"""
+        try:
+            message = """
+⚠️ **WARNING: Skip Proxy?**
+
+Are you sure you want to skip adding a proxy?
+
+**Risks:**
+❌ Account may get frozen
+❌ Verification may fail
+❌ NO MONEY if account frozen
+
+**If frozen:**
+• Your account will be rejected
+• No payment will be made
+• You lose the account
+
+Do you really want to skip?
+            """
+            
+            buttons = [
+                [Button.inline("✅ Yes, Skip", f"skip_confirm_{account_id}")],
+                [Button.inline("❌ No, Add Proxy", f"add_proxy_{account_id}")]
+            ]
+            
+            await self.edit_message(event, message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Skip proxy confirm error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_skip_proxy_final(self, event, user, account_id):
+        """Handle final skip"""
+        try:
+            await self.edit_message(event, "⚠️ **Proxy Skipped**\n\n🔍 Starting verification without proxy...\n\n⚠️ Remember: No payment if account gets frozen!")
+            
+            # Start verification
+            import asyncio
+            asyncio.create_task(self.run_verification(account_id, event.chat_id))
+            
+        except Exception as e:
+            logger.error(f"Skip proxy final error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+
+    
+    async def process_proxy_config(self, event, seller_id, account_id, proxy_text):
+        """Process proxy configuration"""
+        try:
+            import re
+            from app.models import SellerProxy, SellerProxyManager
+            
+            # Clear state
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": seller_id},
+                {"$unset": {"state": ""}}
+            )
+            
+            # Parse proxy
+            match = re.match(r'(socks5|socks4|http)://(?:([^:]+):([^@]+)@)?([^:]+):(\d+)', proxy_text)
+            
+            if not match:
+                await self.send_message(
+                    event.chat_id,
+                    "❌ **Invalid Proxy Format**\n\nPlease use format:\n`type://host:port`\nor\n`type://user:pass@host:port`"
+                )
+                return
+            
+            proxy_type, username, password, host, port = match.groups()
+            
+            # Create proxy
+            proxy = SellerProxy(
+                seller_id=seller_id,
+                proxy_type=proxy_type,
+                proxy_host=host,
+                proxy_port=int(port),
+                proxy_username=username,
+                proxy_password=password,
+                accounts_count=1,
+                max_accounts=10
+            )
+            
+            # Save proxy
+            proxy_manager = SellerProxyManager(self.db_connection)
+            await proxy_manager.add_proxy(seller_id, proxy)
+            
+            # Link account to proxy
+            from bson import ObjectId
+            await self.db_connection.accounts.update_one(
+                {"_id": ObjectId(account_id)},
+                {"$set": {"proxy_host": host, "uses_proxy": True}}
+            )
+            
+            await self.send_message(
+                event.chat_id,
+                f"✅ **Proxy Added Successfully!**\n\n"
+                f"Type: {proxy_type.upper()}\n"
+                f"Host: {host}:{port}\n"
+                f"Capacity: 1/10 accounts\n\n"
+                f"🔍 Starting verification with proxy..."
+            )
+            
+            # Start verification
+            import asyncio
+            asyncio.create_task(self.run_verification(account_id, event.chat_id))
+            
+        except Exception as e:
+            logger.error(f"Process proxy config error: {e}")
+            await self.send_message(event.chat_id, f"❌ Error: {str(e)}")
+
+    
+    async def handle_country_selected(self, event, user, country):
+        """Handle country selection for upload"""
+        try:
+            # Store country temporarily
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user.telegram_user_id},
+                {"$set": {"temp_country": country}}
+            )
+            
+            # Show proxy prompt
+            await self.show_proxy_prompt_before_upload(event, user, country)
+            
+        except Exception as e:
+            logger.error(f"Country selected error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def show_proxy_prompt_before_upload(self, event, user, country):
+        """Show proxy prompt before upload"""
+        try:
+            from app.models import SellerProxyManager
+            proxy_manager = SellerProxyManager(self.db_connection)
+            
+            country_names = {
+                "IN": "🇮🇳 India",
+                "US": "🇺🇸 USA", 
+                "GB": "🇬🇧 UK",
+                "CA": "🇨🇦 Canada",
+                "AU": "🇦🇺 Australia",
+                "DE": "🇩🇪 Germany",
+                "OTHER": "🌐 Other"
+            }
+            
+            country_name = country_names.get(country, country)
+            
+            message = f"""
+⚠️ **PROXY REQUIRED FOR {country_name} ACCOUNT**
+
+You're adding a {country_name} account.
+**You need a {country_name} proxy!**
+
+**Why Proxy?**
+• Prevents account freezing
+• Matches account location
+• Required for verification
+
+**Supported Types:**
+• SOCKS5 (recommended)
+• SOCKS4  
+• HTTP
+
+❌ **MTProto NOT supported**
+
+**1 proxy per 10 accounts**
+
+⚠️ **WARNING:** If you skip and account gets frozen, NO MONEY will be added!
+
+Add {country_name} proxy now:
+            """
+            
+            buttons = [
+                [Button.inline(f"➕ Add {country_name} Proxy", f"add_proxy_upload_{country}")],
+                [Button.inline("⏭️ Skip (Risky)", f"skip_proxy_upload_{country}")]
+            ]
+            
+            await self.edit_message(event, message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Show proxy prompt before upload error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_phone_for_proxy(self, event, user, phone_number):
+        """Handle phone number and detect country for proxy"""
+        try:
+            # Detect country from phone
+            country = self.detect_country_from_phone(phone_number)
+            
+            # Store phone and country
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user.telegram_user_id},
+                {"$set": {"temp_phone": phone_number, "temp_country": country}}
+            )
+            
+            country_names = {
+                "IN": "🇮🇳 India",
+                "US": "🇺🇸 USA",
+                "GB": "🇬🇧 UK", 
+                "CA": "🇨🇦 Canada",
+                "AU": "🇦🇺 Australia",
+                "DE": "🇩🇪 Germany"
+            }
+            
+            country_name = country_names.get(country, f"🌐 {country}")
+            
+            message = f"""
+⚠️ **PROXY REQUIRED FOR {country_name} ACCOUNT**
+
+Detected: {country_name} account
+Phone: {phone_number}
+
+**You need a {country_name} proxy!**
+
+**Why Proxy?**
+• Prevents account freezing
+• Matches account location  
+• Required for verification
+
+**Supported:** SOCKS5, SOCKS4, HTTP
+❌ **NOT Supported:** MTProto
+
+⚠️ **WARNING:** Skip = No payment if frozen!
+
+Add {country_name} proxy now:
+            """
+            
+            buttons = [
+                [Button.inline(f"➕ Add {country_name} Proxy", f"add_proxy_otp_{country}")],
+                [Button.inline("⏭️ Skip (Risky)", f"skip_proxy_otp_{country}")]
+            ]
+            
+            await self.send_message(event.chat_id, message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Handle phone for proxy error: {e}")
+            await self.send_message(event.chat_id, f"❌ Error: {str(e)}")
+    
+    def detect_country_from_phone(self, phone):
+        """Detect country from phone number"""
+        phone = phone.strip().replace("+", "")
+        
+        # Country code mapping
+        if phone.startswith("91"): return "IN"
+        elif phone.startswith("1"): return "US"
+        elif phone.startswith("44"): return "GB"
+        elif phone.startswith("61"): return "AU"
+        elif phone.startswith("49"): return "DE"
+        elif phone.startswith("33"): return "FR"
+        elif phone.startswith("39"): return "IT"
+        elif phone.startswith("34"): return "ES"
+        elif phone.startswith("7"): return "RU"
+        elif phone.startswith("86"): return "CN"
+        elif phone.startswith("81"): return "JP"
+        elif phone.startswith("82"): return "KR"
+        elif phone.startswith("55"): return "BR"
+        elif phone.startswith("52"): return "MX"
+        elif phone.startswith("27"): return "ZA"
+        else: return "OTHER"
+
+    
+    async def handle_add_proxy_upload(self, event, user, country):
+        """Handle add proxy for upload flow"""
+        try:
+            country_names = {"IN": "Indian", "US": "US", "GB": "UK", "CA": "Canadian", "AU": "Australian", "DE": "German", "OTHER": ""}
+            country_name = country_names.get(country, "")
+            
+            message = f"""
+🌐 **Add {country_name} Proxy**
+
+Send proxy in format:
+`type://host:port`
+or
+`type://username:password@host:port`
+
+**Examples:**
+`socks5://proxy.example.com:1080`
+`socks5://user:pass@proxy.example.com:1080`
+
+**Supported:** SOCKS5, SOCKS4, HTTP
+❌ **NOT:** MTProto
+
+Send your {country_name} proxy:
+            """
+            
+            await self.edit_message(event, message, [[Button.inline("❌ Cancel", "back_to_main")]])
+            
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user.telegram_user_id},
+                {"$set": {"state": f"awaiting_proxy_upload_{country}"}}
+            )
+            
+        except Exception as e:
+            logger.error(f"Add proxy upload error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_add_proxy_otp(self, event, user, country):
+        """Handle add proxy for OTP flow"""
+        try:
+            country_names = {"IN": "Indian", "US": "US", "GB": "UK", "CA": "Canadian", "AU": "Australian", "DE": "German", "OTHER": ""}
+            country_name = country_names.get(country, "")
+            
+            message = f"""
+🌐 **Add {country_name} Proxy**
+
+Send proxy in format:
+`type://host:port`
+or  
+`type://username:password@host:port`
+
+**Examples:**
+`socks5://proxy.example.com:1080`
+`socks5://user:pass@proxy.example.com:1080`
+
+**Supported:** SOCKS5, SOCKS4, HTTP
+❌ **NOT:** MTProto
+
+Send your {country_name} proxy:
+            """
+            
+            await self.edit_message(event, message, [[Button.inline("❌ Cancel", "back_to_main")]])
+            
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user.telegram_user_id},
+                {"$set": {"state": f"awaiting_proxy_otp_{country}"}}
+            )
+            
+        except Exception as e:
+            logger.error(f"Add proxy OTP error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_skip_proxy_upload(self, event, user, country):
+        """Handle skip proxy for upload"""
+        try:
+            message = """
+⚠️ **WARNING: Skip Proxy?**
+
+**Risks:**
+❌ Account may get frozen
+❌ Verification may fail
+❌ NO MONEY if account frozen
+
+Do you really want to skip?
+            """
+            
+            buttons = [
+                [Button.inline("✅ Yes, Skip", f"skip_confirm_upload_{country}")],
+                [Button.inline("❌ No, Add Proxy", f"add_proxy_upload_{country}")]
+            ]
+            
+            await self.edit_message(event, message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Skip proxy upload error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_skip_proxy_otp(self, event, user, country):
+        """Handle skip proxy for OTP"""
+        try:
+            message = """
+⚠️ **WARNING: Skip Proxy?**
+
+**Risks:**
+❌ Account may get frozen
+❌ Verification may fail  
+❌ NO MONEY if account frozen
+
+Do you really want to skip?
+            """
+            
+            buttons = [
+                [Button.inline("✅ Yes, Skip", f"skip_confirm_otp_{country}")],
+                [Button.inline("❌ No, Add Proxy", f"add_proxy_otp_{country}")]
+            ]
+            
+            await self.edit_message(event, message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Skip proxy OTP error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+
+    
+    async def handle_skip_confirm_upload(self, event, user, country):
+        """Handle skip confirmation for upload"""
+        try:
+            await self.edit_message(event, "⚠️ **Proxy Skipped**\n\n📤 Now send your session file/string:")
+            
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user.telegram_user_id},
+                {"$set": {"state": "awaiting_upload", "skip_proxy": True}}
+            )
+            
+        except Exception as e:
+            logger.error(f"Skip confirm upload error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_skip_confirm_otp(self, event, user, country):
+        """Handle skip confirmation for OTP"""
+        try:
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+            phone = user_doc.get("temp_phone") if user_doc else None
+            
+            if not phone:
+                await self.edit_message(event, "❌ Session expired. Please start over.")
+                return
+            
+            await self.edit_message(event, "⚠️ **Proxy Skipped**\n\n📱 Sending OTP...")
+            
+            # Mark as skipped and continue with OTP
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user.telegram_user_id},
+                {"$set": {"skip_proxy": True}}
+            )
+            
+            # Create minimal user object
+            class UserObj:
+                def __init__(self, uid):
+                    self.telegram_user_id = uid
+            user_obj = UserObj(user.telegram_user_id)
+            
+            await self.process_phone_number(event, user_obj, phone)
+            
+        except Exception as e:
+            logger.error(f"Skip confirm OTP error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+
+    
+    async def process_proxy_before_account(self, event, seller_id, flow_type, country, proxy_text):
+        """Process proxy configuration before account upload"""
+        try:
+            import re
+            from app.models import SellerProxy, SellerProxyManager
+            
+            # Clear state
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": seller_id},
+                {"$unset": {"state": ""}}
+            )
+            
+            # Parse proxy
+            match = re.match(r'(socks5|socks4|http)://(?:([^:]+):([^@]+)@)?([^:]+):(\d+)', proxy_text)
+            
+            if not match:
+                await self.send_message(
+                    event.chat_id,
+                    "❌ **Invalid Proxy Format**\n\nUse: `type://host:port`"
+                )
+                return
+            
+            proxy_type, username, password, host, port = match.groups()
+            
+            # Create proxy
+            proxy = SellerProxy(
+                seller_id=seller_id,
+                proxy_type=proxy_type,
+                proxy_host=host,
+                proxy_port=int(port),
+                proxy_username=username,
+                proxy_password=password,
+                accounts_count=0,
+                max_accounts=10
+            )
+            
+            # Save proxy
+            proxy_manager = SellerProxyManager(self.db_connection)
+            await proxy_manager.add_proxy(seller_id, proxy)
+            
+            # Store proxy info for next upload
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": seller_id},
+                {"$set": {"temp_proxy_host": host, "has_proxy": True}}
+            )
+            
+            await self.send_message(
+                event.chat_id,
+                f"✅ **{country} Proxy Added!**\n\n"
+                f"Type: {proxy_type.upper()}\n"
+                f"Host: {host}:{port}\n"
+                f"Capacity: 0/10 accounts\n\n"
+            )
+            
+            # Continue with appropriate flow
+            if flow_type == "upload":
+                await self.send_message(
+                    event.chat_id,
+                    "📤 **Now Upload Your Account**\n\nSend:\n• Session file\n• Session string\n• TData archive"
+                )
+                await self.db_connection.users.update_one(
+                    {"telegram_user_id": seller_id},
+                    {"$set": {"state": "awaiting_upload"}}
+                )
+            elif flow_type == "otp":
+                # Get phone and continue OTP flow
+                user_doc = await self.db_connection.users.find_one({"telegram_user_id": seller_id})
+                phone = user_doc.get("temp_phone") if user_doc else None
+                
+                if phone:
+                    class UserObj:
+                        def __init__(self, uid):
+                            self.telegram_user_id = uid
+                    user_obj = UserObj(seller_id)
+                    await self.process_phone_number(event, user_obj, phone)
+                else:
+                    await self.send_message(event.chat_id, "❌ Session expired. Please start over.")
+            
+        except Exception as e:
+            logger.error(f"Process proxy before account error: {e}")
+            await self.send_message(event.chat_id, f"❌ Error: {str(e)}")

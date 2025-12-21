@@ -4,3 +4,5 @@ from .listing import Listing, ListingStatus
 from .transaction import Transaction, TransactionType, PaymentMethod, TransactionStatus
 from .AdminAction import AdminAction, ActionType
 from .BotSettings import BotSettings, SettingsManager
+from .ProxySettings import ProxySettings, ProxyManager
+from .SellerProxy import SellerProxy, SellerProxyManager
