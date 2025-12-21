@@ -169,3 +169,7 @@ class SettingsManager:
             
         except Exception as e:
             return False
+    
+    async def get_verification_limits(self) -> Dict[str, Any]:
+        """Get verification limits from settings"""
+        return await self.get_setting("seller_verification_settings")

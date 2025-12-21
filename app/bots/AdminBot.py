@@ -2599,37 +2599,42 @@ Click to modify:
                 await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
                 return
             
-            checks = account.get("checks", {})
-            quality_score = 0
-            max_quality = 100
-            
-            # Profile completeness (30 points)
-            profile_check = checks.get("profile_completeness", {})
-            if profile_check.get("passed"):
-                quality_score += 30
-            elif profile_check.get("score", 0) >= 2:
-                quality_score += 15
-            
-            # Account age (20 points)
-            age_check = checks.get("account_age", {})
-            if age_check.get("passed"):
-                quality_score += 20
-            elif age_check.get("estimated_days", 0) >= 7:
-                quality_score += 10
-            
-            # Clean status (25 points)
-            if checks.get("spam_status", {}).get("passed"):
-                quality_score += 25
-            
-            # Activity (15 points)
-            if checks.get("activity_patterns", {}).get("passed"):
-                quality_score += 15
-            
-            # Security (10 points)
-            if checks.get("two_factor_auth", {}).get("passed"):
-                quality_score += 10
-            
-            quality_percentage = (quality_score / max_quality) * 100
+            # Use quality_score from account if available, otherwise calculate from checks
+            if account.get("quality_score") is not None:
+                quality_score = account.get("quality_score", 0)
+                quality_percentage = quality_score
+            else:
+                checks = account.get("checks", {})
+                quality_score = 0
+                max_quality = 100
+                
+                # Profile completeness (30 points)
+                profile_check = checks.get("profile_completeness", {})
+                if profile_check.get("passed"):
+                    quality_score += 30
+                elif profile_check.get("score", 0) >= 2:
+                    quality_score += 15
+                
+                # Account age (20 points)
+                age_check = checks.get("account_age", {})
+                if age_check.get("passed"):
+                    quality_score += 20
+                elif age_check.get("estimated_days", 0) >= 7:
+                    quality_score += 10
+                
+                # Clean status (25 points)
+                if checks.get("spam_status", {}).get("passed"):
+                    quality_score += 25
+                
+                # Activity (15 points)
+                if checks.get("activity_patterns", {}).get("passed"):
+                    quality_score += 15
+                
+                # Security (10 points)
+                if checks.get("two_factor_auth", {}).get("passed"):
+                    quality_score += 10
+                
+                quality_percentage = (quality_score / max_quality) * 100
             
             if quality_percentage >= 80:
                 grade = "A+ (Excellent)"
@@ -2644,6 +2649,7 @@ Click to modify:
                 grade = "D (Poor)"
                 emoji = "❌"
             
+            checks = account.get("checks", {})
             message = f"{emoji} **Quality Score Report**\n\n"
             message += f"**Overall Score:** {quality_percentage:.0f}/100\n"
             message += f"**Grade:** {grade}\n\n"
@@ -2670,50 +2676,59 @@ Click to modify:
                 await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
                 return
             
-            checks = account.get("checks", {})
+            # Use actual account data, not cached checks
             security_issues = []
             security_warnings = []
             security_passed = []
             
-            # Check spam status
-            if not checks.get("spam_status", {}).get("passed"):
+            # Check spam status from account field
+            spam_status = account.get("spam_status", "unknown")
+            if spam_status == "restricted" or spam_status == "spam":
                 security_issues.append("❌ Account is spam-restricted")
-            else:
+            elif spam_status == "clean" or spam_status == "ok":
                 security_passed.append("✅ No spam restrictions")
-            
-            # Check active sessions
-            sessions = checks.get("active_sessions", {})
-            if sessions.get("value", 0) > 2:
-                security_warnings.append(f"⚠️ Multiple active sessions: {sessions.get('value')}")
             else:
-                security_passed.append(f"✅ Active sessions: {sessions.get('value', 1)}")
+                # Check from checks if available
+                checks = account.get("checks", {})
+                if not checks.get("spam_status", {}).get("passed", True):
+                    security_issues.append("❌ Account is spam-restricted")
+                else:
+                    security_passed.append("✅ No spam restrictions")
             
-            # Check 2FA
-            if not checks.get("two_factor_auth", {}).get("passed"):
+            # Check 2FA from account field
+            has_2fa = account.get("has_2fa", False)
+            if not has_2fa:
                 security_warnings.append("⚠️ 2FA not enabled")
             else:
                 security_passed.append("✅ 2FA enabled")
             
-            # Check contact count
-            contacts = checks.get("contact_count", {})
-            if contacts.get("value", 0) > 10:
-                security_warnings.append(f"⚠️ High contact count: {contacts.get('value')}")
+            # Check contact count from account field
+            contact_count = account.get("contact_count", 0)
+            if contact_count > 10:
+                security_warnings.append(f"⚠️ High contact count: {contact_count}")
             else:
-                security_passed.append(f"✅ Contact count: {contacts.get('value', 0)}")
+                security_passed.append(f"✅ Contact count: {contact_count}")
             
-            # Check owned groups
-            owned = checks.get("owned_groups", {})
-            if owned.get("value", 0) > 5:
-                security_warnings.append(f"⚠️ Owns {owned.get('value')} groups/channels")
+            # Check owned groups from account field
+            owned_groups = account.get("owned_groups_count", 0)
+            if owned_groups > 5:
+                security_warnings.append(f"⚠️ Owns {owned_groups} groups/channels")
             else:
-                security_passed.append(f"✅ Owned groups: {owned.get('value', 0)}")
+                security_passed.append(f"✅ Owned groups: {owned_groups}")
             
-            # Check bot interactions
-            bots = checks.get("bot_chats", {})
-            if bots.get("value", 0) > 5:
-                security_warnings.append(f"⚠️ Many bot interactions: {bots.get('value')}")
+            # Check bot interactions from account field
+            bot_chats = account.get("bot_chats_count", 0)
+            if bot_chats > 5:
+                security_warnings.append(f"⚠️ Many bot interactions: {bot_chats}")
             else:
-                security_passed.append(f"✅ Bot chats: {bots.get('value', 0)}")
+                security_passed.append(f"✅ Bot chats: {bot_chats}")
+            
+            # Active sessions - assume 1 if not specified
+            active_sessions = account.get("active_sessions_count", 1)
+            if active_sessions > 2:
+                security_warnings.append(f"⚠️ Multiple active sessions: {active_sessions}")
+            else:
+                security_passed.append(f"✅ Active sessions: {active_sessions}")
             
             # Determine overall security level
             if len(security_issues) > 0:
