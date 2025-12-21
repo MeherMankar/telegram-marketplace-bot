@@ -53,20 +53,25 @@ async def handle_proxy_add(self, event):
         message = """
 🔧 **Add Proxy Configuration**
 
-Send proxy details in format:
+Send proxy details in one of these formats:
+
+**Standard format:**
 `type://host:port`
-or
 `type://username:password@host:port`
 
+**Telegram format:**
+`tg://socks?server=host&port=1080`
+`tg://socks?server=host&port=1080&user=username&pass=password`
+
 **Supported types:**
-• `socks5` - SOCKS5 proxy (recommended)
+• `socks5` / `socks` - SOCKS5 proxy (recommended)
 • `socks4` - SOCKS4 proxy
 • `http` - HTTP proxy
 • `mtproto` - MTProto proxy (requires secret)
 
 **Examples:**
 `socks5://proxy.example.com:1080`
-`socks5://user:pass@proxy.example.com:1080`
+`tg://socks?server=163.53.204.178&port=9813`
 `mtproto://proxy.example.com:443?secret=abc123`
 
 Send /cancel to abort.
@@ -103,8 +108,33 @@ async def handle_proxy_config_input(self, event, user):
         import re
         from urllib.parse import urlparse, parse_qs
         
+        # Handle Telegram tg:// format (tg://socks?server=...&port=...)
+        if text.startswith("tg://"):
+            parsed = urlparse(text)
+            params = parse_qs(parsed.query)
+            
+            proxy_type = parsed.netloc  # socks, http, etc.
+            host = params.get('server', [None])[0]
+            port = params.get('port', [None])[0]
+            username = params.get('user', [None])[0]
+            password = params.get('pass', [None])[0]
+            secret = params.get('secret', [None])[0]
+            
+            if not host or not port:
+                await self.send_message(event.chat_id, "❌ Invalid tg:// format. Missing server or port.")
+                return
+            
+            proxy = ProxySettings(
+                proxy_type="socks5" if proxy_type == "socks" else proxy_type,
+                proxy_host=host,
+                proxy_port=int(port),
+                proxy_username=username,
+                proxy_password=password,
+                proxy_secret=secret,
+                enabled=True
+            )
         # Handle mtproto format
-        if text.startswith("mtproto://"):
+        elif text.startswith("mtproto://"):
             parsed = urlparse(text)
             secret = parse_qs(parsed.query).get('secret', [None])[0]
             
