@@ -93,7 +93,8 @@ Send /cancel to abort.
 async def handle_proxy_config_input(self, event, user):
     """Handle proxy configuration input"""
     try:
-        text = event.text.strip()
+        import html
+        text = html.unescape(event.text.strip())
         
         if text == "/cancel":
             await self.db_connection.users.update_one(

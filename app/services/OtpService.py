@@ -18,8 +18,14 @@ class OtpService:
         self.db_connection = db_connection
         self.pending_sessions = {}  # {user_id: {phone, client, sent_code}}
         
-    async def verify_account_ownership(self, phone_number: str, user_id: int) -> dict:
-        """Send OTP to phone number for verification"""
+    async def verify_account_ownership(self, phone_number: str, user_id: int, seller_proxy: dict = None) -> dict:
+        """Send OTP to phone number for verification
+        
+        Args:
+            phone_number: Phone number to send OTP to
+            user_id: Telegram user ID
+            seller_proxy: Optional seller-specific proxy dict with keys: type, addr, port, username, password
+        """
         try:
             logger.info(f"Sending OTP to {phone_number} for user {user_id}")
             
@@ -32,12 +38,15 @@ class OtpService:
                 del self.pending_sessions[user_id]
                 logger.info(f"Cleaned up old session for user {user_id}")
             
-            # Get proxy configuration
-            proxy = None
-            if self.db_connection:
+            # Use seller proxy if provided, otherwise get global proxy
+            proxy = seller_proxy
+            if not proxy and self.db_connection:
                 from app.models import ProxyManager
                 proxy_manager = ProxyManager(self.db_connection)
                 proxy = await proxy_manager.get_proxy_dict()
+            
+            if proxy:
+                logger.info(f"Using proxy for OTP: {proxy.get('addr')}:{proxy.get('port')} (type: {proxy.get('type')})")
             
             # Device snooping for realistic sessions
             devices = [

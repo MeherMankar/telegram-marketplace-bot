@@ -149,7 +149,16 @@ Ready to start selling?
         try:
             data = event.data.decode('utf-8')
             logger.info(f"[SELLER] Callback received: '{data}' from user {event.sender_id}")
+            
+            # DEBUG: Check temp_phone BEFORE get_or_create_user
+            user_check = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
+            print(f"[SELLER] CALLBACK START - temp_phone in DB: {user_check.get('temp_phone') if user_check else 'NO USER'}")
+            
             user = await self.get_or_create_user(event)
+            
+            # DEBUG: Check temp_phone AFTER get_or_create_user
+            user_check2 = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
+            print(f"[SELLER] AFTER get_or_create_user - temp_phone in DB: {user_check2.get('temp_phone') if user_check2 else 'NO USER'}")
             
             if data == "upload_account":
                 await self.handle_upload_account(event, user)
@@ -248,12 +257,14 @@ Ready to start selling?
                 await self.handle_help(event)
             elif data.startswith("add_proxy_"):
                 parts = data.split("_")
+                logger.info(f"[SELLER] add_proxy callback - parts: {parts}")
                 if len(parts) >= 3:
                     if parts[2] == "upload":
                         country = parts[3] if len(parts) > 3 else "OTHER"
                         await self.handle_add_proxy_upload(event, user, country)
                     elif parts[2] == "otp":
                         country = parts[3] if len(parts) > 3 else "OTHER"
+                        logger.info(f"[SELLER] Calling handle_add_proxy_otp for country={country}")
                         await self.handle_add_proxy_otp(event, user, country)
                     else:
                         account_id = parts[2]
@@ -391,6 +402,8 @@ Send your phone number:
                 "action": "awaiting_phone_for_proxy"
             }
             
+            logger.info(f"[SELLER] Set pending_actions for {user_id}: awaiting_phone_for_proxy")
+            
             await self.edit_message(
                 event,
                 phone_message,
@@ -417,6 +430,8 @@ Send your phone number:
                 self.pending_actions = {}
             
             pending_action = self.pending_actions.get(user_id)
+            
+            logger.info(f"[SELLER] Checking pending_actions for {user_id}: {pending_action}")
             
             if pending_action and pending_action.get("action") == "awaiting_phone_for_proxy":
                 phone_text = str(event.text).strip()
@@ -632,9 +647,11 @@ Send your phone number:
             
             account_id = login_result["account_id"]
             
-            # Show proxy prompt before verification
             await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **Session imported successfully!**")
-            await self.show_proxy_prompt(event.chat_id, user.telegram_user_id, account_id)
+            
+            # Start verification directly
+            import asyncio
+            asyncio.create_task(self.run_verification(account_id, event.chat_id))
             
         except Exception as e:
             logger.error(f"Document handler error: {str(e)}")
@@ -684,9 +701,11 @@ Send your phone number:
                 
                 account_id = login_result["account_id"]
                 
-                # Show proxy prompt before verification
                 await self.client.edit_message(event.chat_id, processing_msg.id, "✅ **TData imported successfully!**")
-                await self.show_proxy_prompt(event.chat_id, user.telegram_user_id, account_id)
+                
+                # Start verification directly
+                import asyncio
+                asyncio.create_task(self.run_verification(account_id, event.chat_id))
                 
         except Exception as e:
             logger.error(f"TData archive handler error: {str(e)}")
@@ -719,10 +738,33 @@ Send your phone number:
                 {"$unset": {"state": ""}}
             )
             
-            # Use shared OTP service instance
-            print(f"[SELLER] Calling OTP service...")
-            logger.info(f"[SELLER] Calling verify_account_ownership for {phone_number}")
-            otp_result = await self.otp_service.verify_account_ownership(phone_number, user_id)
+            # Get seller proxy if available
+            seller_proxy = None
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
+            
+            # Only use proxy if not skipped
+            if user_doc and not user_doc.get("skip_proxy") and user_doc.get("temp_proxy_host"):
+                # Get proxy from seller_proxies collection
+                from app.models import SellerProxyManager
+                proxy_manager = SellerProxyManager(self.db_connection)
+                proxy_doc = await self.db_connection.seller_proxies.find_one({
+                    "seller_id": user_id,
+                    "proxy_host": user_doc["temp_proxy_host"]
+                })
+                if proxy_doc:
+                    seller_proxy = {
+                        "proxy_type": proxy_doc["proxy_type"],
+                        "addr": proxy_doc["proxy_host"],
+                        "port": proxy_doc["proxy_port"],
+                        "username": proxy_doc.get("proxy_username"),
+                        "password": proxy_doc.get("proxy_password")
+                    }
+                    logger.info(f"[SELLER] Using seller proxy: {seller_proxy['addr']}:{seller_proxy['port']}")
+            
+            # Use shared OTP service instance with seller proxy
+            print(f"[SELLER] Calling OTP service with proxy={seller_proxy}...")
+            logger.info(f"[SELLER] Calling verify_account_ownership for {phone_number} with proxy={seller_proxy}")
+            otp_result = await self.otp_service.verify_account_ownership(phone_number, user_id, seller_proxy)
             print(f"[SELLER] OTP result: {otp_result.get('success')}")
             logger.info(f"[SELLER] OTP result: {otp_result}")
             
@@ -816,8 +858,9 @@ Send your phone number:
                 
                 await self.client.edit_message(event.chat_id, processing_msg.id, success_msg)
                 
-                # Show proxy prompt before verification
-                await self.show_proxy_prompt(event.chat_id, user_id, account_id)
+                # Start verification directly
+                import asyncio
+                asyncio.create_task(self.run_verification(account_id, event.chat_id))
                 
             elif verification_result.get('requires_password'):
                 tfa_msg = "🔐 **Two-Factor Authentication Required**\n\nYour account has 2FA enabled. Please enter your password:"
@@ -899,8 +942,9 @@ Send your phone number:
                 
                 await self.client.edit_message(event.chat_id, processing_msg.id, success_msg)
                 
-                # Show proxy prompt before verification
-                await self.show_proxy_prompt(event.chat_id, user_id, account_id)
+                # Start verification directly
+                import asyncio
+                asyncio.create_task(self.run_verification(account_id, event.chat_id))
                 
             else:
                 error_msg = f"❌ **Password Verification Failed**\n\n{verification_result.get('error', 'Unknown error')}"
@@ -1071,7 +1115,54 @@ Send your phone number:
             logger.error(f"Spam check error: {str(e)}")
             return {"status": "error", "message": str(e)}
     
+    async def check_account_frozen(self, session_string, chat_id):
+        """Check if account is frozen by trying to send a message"""
+        try:
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
+            from telethon.errors import UserDeactivatedError, AuthKeyUnregisteredError
+            from app.utils.encryption import decrypt_data
+            import asyncio
+            
+            decrypted_session = decrypt_data(session_string)
+            client = TelegramClient(StringSession(decrypted_session), self.api_id, self.api_hash)
+            
+            try:
+                await client.connect()
+                
+                if not await client.is_user_authorized():
+                    await client.disconnect()
+                    return {"is_frozen": True, "reason": "Not authorized"}
+                
+                # Try to get own info
+                me = await client.get_me()
+                
+                # Try to send message to Saved Messages
+                try:
+                    await client.send_message('me', 'Test')
+                    await asyncio.sleep(1)
+                    # Delete test message
+                    messages = await client.get_messages('me', limit=1)
+                    if messages:
+                        await messages[0].delete()
+                    
+                    await client.disconnect()
+                    return {"is_frozen": False, "reason": "Account is active"}
+                    
+                except Exception as send_error:
+                    await client.disconnect()
+                    return {"is_frozen": True, "reason": f"Cannot send messages: {str(send_error)}"}
+                    
+            except (UserDeactivatedError, AuthKeyUnregisteredError) as e:
+                await client.disconnect()
+                return {"is_frozen": True, "reason": "Account deactivated or banned"}
+                
+        except Exception as e:
+            logger.error(f"Frozen check error: {str(e)}")
+            return {"is_frozen": False, "reason": f"Check failed: {str(e)}"}
+    
     async def run_verification(self, account_id, chat_id):
+        """Run automated verification checks and send to admin for manual review"""
         try:
             from bson import ObjectId
             if isinstance(account_id, str):
@@ -1081,12 +1172,40 @@ Send your phone number:
             if not account_doc:
                 return
             
+            # Update status to checking
             await self.db_connection.accounts.update_one(
                 {"_id": account_id},
                 {"$set": {"status": AccountStatus.CHECKING, "updated_at": utc_now()}}
             )
             
-            # Check spam status via @SpamBot first
+            await self.send_message(chat_id, "🔍 **Running Automated Checks...**\n\n1️⃣ Checking if account is frozen\n2️⃣ Spam check via @SpamBot\n3️⃣ Quality score analysis\n4️⃣ Security verification")
+            
+            # 1. Check if account is frozen FIRST
+            frozen_check = await self.check_account_frozen(account_doc["session_string"], chat_id)
+            
+            if frozen_check.get("is_frozen"):
+                # Account is frozen - reject immediately
+                await self.db_connection.accounts.update_one(
+                    {"_id": account_id},
+                    {"$set": {
+                        "status": AccountStatus.REJECTED,
+                        "rejection_reason": "Account is frozen",
+                        "frozen_check_result": frozen_check,
+                        "updated_at": utc_now()
+                    }}
+                )
+                
+                await self.send_message(
+                    chat_id,
+                    "❌ **Account Rejected - Frozen**\n\n"
+                    "Your account is frozen and cannot be sold.\n\n"
+                    "⚠️ No payment will be made for frozen accounts."
+                )
+                return
+            
+            await self.send_message(chat_id, "✅ Account is active (not frozen)")
+            
+            # 2. Check spam status via @SpamBot
             spam_status = await self.check_spam_status(account_doc["session_string"], chat_id)
             if spam_status:
                 await self.db_connection.accounts.update_one(
@@ -1094,26 +1213,49 @@ Send your phone number:
                     {"$set": {"spam_check_result": spam_status, "updated_at": utc_now()}}
                 )
             
+            # 3. Run full verification (30+ checks)
             verification_result = await self.verification_service.verify_account(account_doc)
             
-            update_data = {
-                "checks": verification_result["checks"],
-                "verification_logs": verification_result["logs"],
-                "updated_at": utc_now()
-            }
+            # Save verification results
+            await self.db_connection.accounts.update_one(
+                {"_id": account_id},
+                {"$set": {
+                    "checks": verification_result.get("checks", {}),
+                    "verification_logs": verification_result.get("logs", []),
+                    "frozen_check_result": frozen_check,
+                    "status": AccountStatus.PENDING,  # Always pending for admin review
+                    "updated_at": utc_now()
+                }}
+            )
             
-            if verification_result["overall_status"] == "passed":
-                update_data["status"] = AccountStatus.APPROVED
-                result_message = "✅ **Verification Completed Successfully!**\n\nYour account passed all automated checks."
-            elif verification_result["overall_status"] == "failed":
-                update_data["status"] = AccountStatus.REJECTED
-                result_message = "❌ **Verification Failed**\n\nYour account did not pass the automated checks."
-            else:
-                update_data["status"] = AccountStatus.PENDING
-                result_message = "⚠️ **Manual Review Required**\n\nYour account needs manual admin review."
+            # Calculate quality score
+            checks = verification_result.get("checks", {})
+            quality_score = 0
             
-            await self.db_connection.accounts.update_one({"_id": account_id}, {"$set": update_data})
+            if checks.get("profile_completeness", {}).get("passed"):
+                quality_score += 30
+            if checks.get("account_age", {}).get("passed"):
+                quality_score += 20
+            if checks.get("spam_status", {}).get("passed"):
+                quality_score += 25
+            if checks.get("activity_patterns", {}).get("passed"):
+                quality_score += 15
+            if checks.get("two_factor_auth", {}).get("passed"):
+                quality_score += 10
+            
+            # Show results to seller
+            result_message = f"✅ **Automated Checks Complete!**\n\n"
+            result_message += f"🔓 **Frozen Status:** Not Frozen\n"
+            result_message += f"📊 **Quality Score:** {quality_score}/100\n"
+            result_message += f"🔍 **Verification Score:** {verification_result.get('score_percentage', 0):.1f}%\n"
+            result_message += f"🚫 **Spam Status:** {'Clean' if spam_status.get('status') == 'clean' else 'Limited'}\n\n"
+            result_message += f"⏳ **Status:** Pending admin review\n\n"
+            result_message += f"Your account has been sent to admin for manual verification. You'll be notified once approved!"
+            
             await self.send_message(chat_id, result_message)
+            
+            # Notify admin about new account for review
+            await self.notify_admin_new_account(account_id, account_doc, quality_score, verification_result)
             
         except Exception as e:
             logger.error(f"Verification error: {str(e)}")
@@ -1519,14 +1661,21 @@ Add {country_name} proxy now:
     async def handle_phone_for_proxy(self, event, user, phone_number):
         """Handle phone number and detect country for proxy"""
         try:
+            print(f"[SELLER] handle_phone_for_proxy called - phone={phone_number}, user={user.telegram_user_id}")
+            logger.info(f"[SELLER] handle_phone_for_proxy called with phone={phone_number}, user={user.telegram_user_id}")
+            
             # Detect country from phone
             country = self.detect_country_from_phone(phone_number)
+            print(f"[SELLER] Detected country: {country}")
             
-            # Store phone and country
+            # Store phone and country FIRST
             await self.db_connection.users.update_one(
                 {"telegram_user_id": user.telegram_user_id},
                 {"$set": {"temp_phone": phone_number, "temp_country": country}}
             )
+            
+            print(f"[SELLER] Saved to DB: temp_phone={phone_number}, temp_country={country}")
+            logger.info(f"[SELLER] Saved temp_phone={phone_number}, temp_country={country} for user {user.telegram_user_id}")
             
             country_names = {
                 "IN": "🇮🇳 India",
@@ -1567,6 +1716,10 @@ Add {country_name} proxy now:
             
             await self.send_message(event.chat_id, message, buttons)
             
+            # Debug: Check if temp_phone is still in DB after sending message
+            user_check = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+            print(f"[SELLER] After send_message, temp_phone in DB: {user_check.get('temp_phone') if user_check else 'NO USER'}")
+            
         except Exception as e:
             logger.error(f"Handle phone for proxy error: {e}")
             await self.send_message(event.chat_id, f"❌ Error: {str(e)}")
@@ -1603,17 +1756,14 @@ Add {country_name} proxy now:
             message = f"""
 🌐 **Add {country_name} Proxy**
 
-Send proxy in format:
-`type://host:port`
-or
-`type://username:password@host:port`
+Supported formats:
+• `socks5://host:port`
+• `socks5://user:pass@host:port`
+• `tg://socks?server=host&port=1080`
+• `t.me/socks?server=host&port=1080`
 
-**Examples:**
-`socks5://proxy.example.com:1080`
-`socks5://user:pass@proxy.example.com:1080`
-
-**Supported:** SOCKS5, SOCKS4, HTTP
-❌ **NOT:** MTProto
+Supported: SOCKS5, SOCKS4, HTTP
+❌ NOT: MTProto
 
 Send your {country_name} proxy:
             """
@@ -1632,33 +1782,44 @@ Send your {country_name} proxy:
     async def handle_add_proxy_otp(self, event, user, country):
         """Handle add proxy for OTP flow"""
         try:
+            print(f"[SELLER] handle_add_proxy_otp called for country={country}, user={user.telegram_user_id}")
+            
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+            temp_phone = user_doc.get("temp_phone") if user_doc else None
+            print(f"[SELLER] temp_phone in DB: {temp_phone}")
+            logger.info(f"[SELLER] handle_add_proxy_otp - temp_phone before: {temp_phone}")
+            
             country_names = {"IN": "Indian", "US": "US", "GB": "UK", "CA": "Canadian", "AU": "Australian", "DE": "German", "OTHER": ""}
             country_name = country_names.get(country, "")
             
             message = f"""
 🌐 **Add {country_name} Proxy**
 
-Send proxy in format:
-`type://host:port`
-or  
-`type://username:password@host:port`
+Supported formats:
+• `socks5://host:port`
+• `socks5://user:pass@host:port`
+• `tg://socks?server=host&port=1080`
+• `t.me/socks?server=host&port=1080`
 
-**Examples:**
-`socks5://proxy.example.com:1080`
-`socks5://user:pass@proxy.example.com:1080`
-
-**Supported:** SOCKS5, SOCKS4, HTTP
-❌ **NOT:** MTProto
+Supported: SOCKS5, SOCKS4, HTTP
+❌ NOT: MTProto
 
 Send your {country_name} proxy:
             """
             
             await self.edit_message(event, message, [[Button.inline("❌ Cancel", "back_to_main")]])
             
+            update_data = {"state": f"awaiting_proxy_otp_{country}"}
+            if temp_phone:
+                update_data["temp_phone"] = temp_phone
+                logger.info(f"[SELLER] Preserving temp_phone: {temp_phone}")
+            
             await self.db_connection.users.update_one(
                 {"telegram_user_id": user.telegram_user_id},
-                {"$set": {"state": f"awaiting_proxy_otp_{country}"}}
+                {"$set": update_data}
             )
+            
+            logger.info(f"[SELLER] State set to awaiting_proxy_otp_{country} with temp_phone={temp_phone}")
             
         except Exception as e:
             logger.error(f"Add proxy OTP error: {e}")
@@ -1692,6 +1853,11 @@ Do you really want to skip?
     async def handle_skip_proxy_otp(self, event, user, country):
         """Handle skip proxy for OTP"""
         try:
+            print(f"[SELLER] handle_skip_proxy_otp called for country={country}")
+            
+            # Check temp_phone before doing anything
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+            print(f"[SELLER] temp_phone before skip: {user_doc.get('temp_phone') if user_doc else 'NO USER'}")
             message = """
 ⚠️ **WARNING: Skip Proxy?**
 
@@ -1744,7 +1910,7 @@ Do you really want to skip?
             # Mark as skipped and continue with OTP
             await self.db_connection.users.update_one(
                 {"telegram_user_id": user.telegram_user_id},
-                {"$set": {"skip_proxy": True}}
+                {"$set": {"skip_proxy": True}, "$unset": {"temp_proxy_host": ""}}
             )
             
             # Create minimal user object
@@ -1764,57 +1930,83 @@ Do you really want to skip?
         """Process proxy configuration before account upload"""
         try:
             import re
+            import html
+            from urllib.parse import urlparse, parse_qs
             from app.models import SellerProxy, SellerProxyManager
             
-            # Clear state
             await self.db_connection.users.update_one(
                 {"telegram_user_id": seller_id},
                 {"$unset": {"state": ""}}
             )
             
-            # Parse proxy
-            match = re.match(r'(socks5|socks4|http)://(?:([^:]+):([^@]+)@)?([^:]+):(\d+)', proxy_text)
+            proxy_text = html.unescape(proxy_text.strip())
+            proxy_text = re.sub(r'^https?://', '', proxy_text)
             
-            if not match:
-                await self.send_message(
-                    event.chat_id,
-                    "❌ **Invalid Proxy Format**\n\nUse: `type://host:port`"
-                )
+            if 't.me/proxy' in proxy_text or 't.me/socks' in proxy_text:
+                if '?' not in proxy_text:
+                    await self.send_message(event.chat_id, "❌ Invalid t.me proxy link")
+                    return
+                query_part = proxy_text.split('?')[1]
+                params = {}
+                for param in query_part.split('&'):
+                    if '=' in param:
+                        key, value = param.split('=', 1)
+                        params[key] = value
+                proxy_type = 'socks5'
+                host_val = params.get('server')
+                port_val = int(params.get('port', 1080))
+                username_val = params.get('user')
+                password_val = params.get('pass')
+            elif proxy_text.startswith('tg://'):
+                parsed = urlparse(proxy_text)
+                params = parse_qs(parsed.query)
+                proxy_type = 'socks5'
+                host_val = params.get('server', [''])[0]
+                port_val = int(params.get('port', [1080])[0])
+                username_val = params.get('user', [''])[0] or None
+                password_val = params.get('pass', [''])[0] or None
+            elif '://' in proxy_text:
+                match = re.match(r'(socks5|socks4|http)://(?:([^:]+):([^@]+)@)?([^:]+):(\d+)', proxy_text)
+                if not match:
+                    await self.send_message(event.chat_id, "❌ Invalid proxy format")
+                    return
+                proxy_type, username_val, password_val, host_val, port_val = match.groups()
+                port_val = int(port_val)
+            else:
+                await self.send_message(event.chat_id, "❌ Invalid proxy format")
                 return
             
-            proxy_type, username, password, host, port = match.groups()
+            if not host_val or not port_val:
+                await self.send_message(event.chat_id, "❌ Missing server or port")
+                return
             
-            # Create proxy
             proxy = SellerProxy(
                 seller_id=seller_id,
                 proxy_type=proxy_type,
-                proxy_host=host,
-                proxy_port=int(port),
-                proxy_username=username,
-                proxy_password=password,
+                proxy_host=host_val,
+                proxy_port=port_val,
+                proxy_username=username_val,
+                proxy_password=password_val,
                 accounts_count=0,
                 max_accounts=10
             )
             
-            # Save proxy
             proxy_manager = SellerProxyManager(self.db_connection)
             await proxy_manager.add_proxy(seller_id, proxy)
             
-            # Store proxy info for next upload
             await self.db_connection.users.update_one(
                 {"telegram_user_id": seller_id},
-                {"$set": {"temp_proxy_host": host, "has_proxy": True}}
+                {"$set": {"temp_proxy_host": host_val, "has_proxy": True}}
             )
             
             await self.send_message(
                 event.chat_id,
                 f"✅ **{country} Proxy Added!**\n\n"
                 f"Type: {proxy_type.upper()}\n"
-                f"Host: {host}:{port}\n"
+                f"Host: {host_val}:{port_val}\n"
                 f"Capacity: 0/10 accounts\n\n"
             )
             
-            # Continue with appropriate flow
             if flow_type == "upload":
                 await self.send_message(
                     event.chat_id,
@@ -1825,20 +2017,62 @@ Do you really want to skip?
                     {"$set": {"state": "awaiting_upload"}}
                 )
             elif flow_type == "otp":
-                # Get phone and continue OTP flow
                 user_doc = await self.db_connection.users.find_one({"telegram_user_id": seller_id})
                 phone = user_doc.get("temp_phone") if user_doc else None
                 
+                logger.info(f"[SELLER] OTP flow continuation - phone: {phone}")
+                
                 if phone:
+                    await self.send_message(
+                        event.chat_id,
+                        f"📱 **Sending OTP to {phone}...**\n\nPlease wait..."
+                    )
                     class UserObj:
                         def __init__(self, uid):
                             self.telegram_user_id = uid
                     user_obj = UserObj(seller_id)
                     await self.process_phone_number(event, user_obj, phone)
                 else:
+                    logger.error(f"[SELLER] Phone not found for seller {seller_id}")
                     await self.send_message(event.chat_id, "❌ Session expired. Please start over.")
             
         except Exception as e:
             logger.error(f"Process proxy before account error: {e}")
             await self.send_message(event.chat_id, f"❌ Error: {str(e)}")
 
+
+    async def notify_admin_new_account(self, account_id, account_doc, quality_score, verification_result):
+        """Notify admin about new account pending review"""
+        try:
+            import os
+            admin_ids_str = os.getenv('ADMIN_USER_IDS', '')
+            if not admin_ids_str:
+                logger.warning("No admin user IDs configured")
+                return
+            
+            admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(',') if uid.strip()]
+            
+            username = account_doc.get('username', 'No username')
+            phone = account_doc.get('phone_number', 'Hidden')
+            country = account_doc.get('country', 'Unknown')
+            spam_status = account_doc.get('spam_check_result', {}).get('status', 'unknown')
+            
+            admin_message = f"🔔 **New Account for Review**\n\n"
+            admin_message += f"👤 **Account:** @{username}\n"
+            admin_message += f"📱 **Phone:** {phone}\n"
+            admin_message += f"🌍 **Country:** {country}\n\n"
+            admin_message += f"📊 **Quality Score:** {quality_score}/100\n"
+            admin_message += f"🔍 **Verification:** {verification_result.get('score_percentage', 0):.1f}%\n"
+            admin_message += f"🚫 **Spam Status:** {spam_status.title()}\n\n"
+            admin_message += f"⏳ **Awaiting manual review**\n\n"
+            admin_message += f"Use /start in Admin Bot to review this account."
+            
+            for admin_id in admin_ids:
+                try:
+                    await self.client.send_message(admin_id, admin_message)
+                    logger.info(f"Notified admin {admin_id} about account {account_id}")
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin_id}: {str(e)}")
+            
+        except Exception as e:
+            logger.error(f"Notify admin error: {str(e)}")

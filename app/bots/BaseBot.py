@@ -55,53 +55,61 @@ class BaseBot:
         pass
     
     async def get_or_create_user(self, event) -> User:
-        """Get or create user from event using upsert to avoid duplicate key errors"""
+        """Get or create user from event"""
         try:
             logger.info(f"[{self.bot_name}] Getting/creating user for sender_id: {event.sender_id}")
             
             logger.info(f"[{self.bot_name}] User data: {event.sender.first_name} (@{event.sender.username})")
             
-            try:
-                await self.db_connection.users.delete_many({"user_id": None})
-            except (ValueError, OSError) as e:
-                pass
+            # Avoid mass-deleting user documents. Removing deletion of documents
+            # where `user_id` is None because it may match valid user records
+            # and clear transient fields like `temp_phone`.
             
-            result = await self.db_connection.users.update_one(
-                {"telegram_user_id": event.sender_id},
-                {
-                    "$set": {
+            # First, try to find existing user
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
+            
+            if user_doc:
+                # User exists - don't update anything to preserve temp fields
+                pass
+            else:
+                # Check for old user_id field
+                user_doc = await self.db_connection.users.find_one({"user_id": event.sender_id})
+                if user_doc:
+                    # Update old document
+                    await self.db_connection.users.update_one(
+                        {"_id": user_doc["_id"]},
+                        {
+                            "$set": {
+                                "telegram_user_id": event.sender_id,
+                                "username": event.sender.username,
+                                "first_name": event.sender.first_name,
+                                "last_name": event.sender.last_name,
+                                "language_code": getattr(event.sender, 'lang_code', None)
+                            },
+                            "$unset": {"user_id": 1}
+                        }
+                    )
+                    user_doc["telegram_user_id"] = event.sender_id
+                else:
+                    # Insert new user
+                    user_doc = {
+                        "telegram_user_id": event.sender_id,
                         "username": event.sender.username,
                         "first_name": event.sender.first_name,
                         "last_name": event.sender.last_name,
-                        "language_code": getattr(event.sender, 'lang_code', None)
-                    },
-                    "$setOnInsert": {
-                        "telegram_user_id": event.sender_id,
+                        "language_code": getattr(event.sender, 'lang_code', None),
                         "is_admin": False,
                         "balance": 0.0,
                         "upload_count_today": 0,
                         "created_at": utc_now(),
                         "tos_accepted": None,
                         "last_upload_date": None
-                    },
-                    "$unset": {"user_id": 1}
-                },
-                upsert=True
-            )
+                    }
+                    await self.db_connection.users.insert_one(user_doc)
             
-            user_doc = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
-            
+            # Ensure we have the document
             if not user_doc:
-                user_doc = await self.db_connection.users.find_one({"user_id": event.sender_id})
-                if user_doc:
-                    await self.db_connection.users.update_one(
-                        {"_id": user_doc["_id"]},
-                        {
-                            "$set": {"telegram_user_id": event.sender_id},
-                            "$unset": {"user_id": 1}
-                        }
-                    )
-                    user_doc["telegram_user_id"] = event.sender_id
+                user_doc = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
             
             if not user_doc:
                 raise ValueError(f"Failed to create or find user {event.sender_id}")

@@ -11,6 +11,7 @@ import logging
 import os
 from app.utils.datetime_utils import utc_now
 from app.bots import proxy_handlers
+from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 
@@ -2536,11 +2537,49 @@ Click to modify:
     
     async def handle_verify_account(self, event, user, account_id):
         """Handle account verification"""
-        await self.edit_message(
-            event,
-            "🔍 **Account Verification**\n\nRunning additional verification checks...",
-            [[Button.inline("🔙 Back", "review_accounts")]]
-        )
+        from app.services.VerificationService import VerificationService
+        
+        await self.edit_message(event, "🔍 **Running Verification**\n\nPlease wait...")
+        
+        try:
+            account = await self.db_connection.accounts.find_one({"_id": ObjectId(account_id)})
+            if not account:
+                await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
+                return
+            
+            verification_service = VerificationService(self.db_connection)
+            results = await verification_service.verify_account(account)
+            
+            if results.get("success"):
+                score = results.get("score_percentage", 0)
+                passed = results.get("passed", False)
+                
+                status_emoji = "✅" if passed else "⚠️"
+                status_text = "PASSED" if passed else "FAILED"
+                
+                message = f"{status_emoji} **Verification Results**\n\n"
+                message += f"**Score:** {score:.1f}% ({results['score']}/{results['max_score']})\n"
+                message += f"**Status:** {status_text}\n\n"
+                message += "**Checks:**\n"
+                
+                for check_name, check_data in results.get("checks", {}).items():
+                    check_emoji = "✅" if check_data.get("passed") else "❌"
+                    message += f"{check_emoji} {check_name.replace('_', ' ').title()}\n"
+                
+                message += "\n**Logs:**\n" + "\n".join(results.get("logs", [])[:10])
+                
+                await self.db_connection.accounts.update_one(
+                    {"_id": ObjectId(account_id)},
+                    {"$set": {"checks": results.get("checks", {}), "verification_logs": results.get("logs", [])}}
+                )
+            else:
+                message = f"❌ **Verification Failed**\n\nError: {results.get('error', 'Unknown error')}"
+            
+            await self.edit_message(event, message, [[Button.inline("🔙 Back", "review_accounts")]])
+            
+        except Exception as e:
+            logger.error(f"Verify account error: {str(e)}")
+            await self.edit_message(event, f"❌ Error: {str(e)}", [[Button.inline("🔙 Back", "review_accounts")]])
     
     async def handle_auto_price(self, event, user, account_id):
         """Handle auto pricing"""
@@ -2552,19 +2591,157 @@ Click to modify:
     
     async def handle_quality_check(self, event, user, account_id):
         """Handle quality score check"""
-        await self.edit_message(
-            event,
-            "📊 **Quality Score**\n\nAnalyzing account quality metrics...",
-            [[Button.inline("🔙 Back", "review_accounts")]]
-        )
+        await self.edit_message(event, "📊 **Analyzing Quality**\n\nPlease wait...")
+        
+        try:
+            account = await self.db_connection.accounts.find_one({"_id": ObjectId(account_id)})
+            if not account:
+                await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
+                return
+            
+            checks = account.get("checks", {})
+            quality_score = 0
+            max_quality = 100
+            
+            # Profile completeness (30 points)
+            profile_check = checks.get("profile_completeness", {})
+            if profile_check.get("passed"):
+                quality_score += 30
+            elif profile_check.get("score", 0) >= 2:
+                quality_score += 15
+            
+            # Account age (20 points)
+            age_check = checks.get("account_age", {})
+            if age_check.get("passed"):
+                quality_score += 20
+            elif age_check.get("estimated_days", 0) >= 7:
+                quality_score += 10
+            
+            # Clean status (25 points)
+            if checks.get("spam_status", {}).get("passed"):
+                quality_score += 25
+            
+            # Activity (15 points)
+            if checks.get("activity_patterns", {}).get("passed"):
+                quality_score += 15
+            
+            # Security (10 points)
+            if checks.get("two_factor_auth", {}).get("passed"):
+                quality_score += 10
+            
+            quality_percentage = (quality_score / max_quality) * 100
+            
+            if quality_percentage >= 80:
+                grade = "A+ (Excellent)"
+                emoji = "🌟"
+            elif quality_percentage >= 60:
+                grade = "B (Good)"
+                emoji = "✅"
+            elif quality_percentage >= 40:
+                grade = "C (Average)"
+                emoji = "⚠️"
+            else:
+                grade = "D (Poor)"
+                emoji = "❌"
+            
+            message = f"{emoji} **Quality Score Report**\n\n"
+            message += f"**Overall Score:** {quality_percentage:.0f}/100\n"
+            message += f"**Grade:** {grade}\n\n"
+            message += f"**Breakdown:**\n"
+            message += f"• Profile: {30 if checks.get('profile_completeness', {}).get('passed') else 0}/30\n"
+            message += f"• Age: {20 if checks.get('account_age', {}).get('passed') else 0}/20\n"
+            message += f"• Clean Status: {25 if checks.get('spam_status', {}).get('passed') else 0}/25\n"
+            message += f"• Activity: {15 if checks.get('activity_patterns', {}).get('passed') else 0}/15\n"
+            message += f"• Security: {10 if checks.get('two_factor_auth', {}).get('passed') else 0}/10\n"
+            
+            await self.edit_message(event, message, [[Button.inline("🔙 Back", "review_accounts")]])
+            
+        except Exception as e:
+            logger.error(f"Quality check error: {str(e)}")
+            await self.edit_message(event, f"❌ Error: {str(e)}", [[Button.inline("🔙 Back", "review_accounts")]])
     
     async def handle_security_check(self, event, user, account_id):
         """Handle security check"""
-        await self.edit_message(
-            event,
-            "🛡️ **Security Check**\n\nRunning security analysis...",
-            [[Button.inline("🔙 Back", "review_accounts")]]
-        )
+        await self.edit_message(event, "🛡️ **Running Security Analysis**\n\nPlease wait...")
+        
+        try:
+            account = await self.db_connection.accounts.find_one({"_id": ObjectId(account_id)})
+            if not account:
+                await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
+                return
+            
+            checks = account.get("checks", {})
+            security_issues = []
+            security_warnings = []
+            security_passed = []
+            
+            # Check spam status
+            if not checks.get("spam_status", {}).get("passed"):
+                security_issues.append("❌ Account is spam-restricted")
+            else:
+                security_passed.append("✅ No spam restrictions")
+            
+            # Check active sessions
+            sessions = checks.get("active_sessions", {})
+            if sessions.get("value", 0) > 2:
+                security_warnings.append(f"⚠️ Multiple active sessions: {sessions.get('value')}")
+            else:
+                security_passed.append(f"✅ Active sessions: {sessions.get('value', 1)}")
+            
+            # Check 2FA
+            if not checks.get("two_factor_auth", {}).get("passed"):
+                security_warnings.append("⚠️ 2FA not enabled")
+            else:
+                security_passed.append("✅ 2FA enabled")
+            
+            # Check contact count
+            contacts = checks.get("contact_count", {})
+            if contacts.get("value", 0) > 10:
+                security_warnings.append(f"⚠️ High contact count: {contacts.get('value')}")
+            else:
+                security_passed.append(f"✅ Contact count: {contacts.get('value', 0)}")
+            
+            # Check owned groups
+            owned = checks.get("owned_groups", {})
+            if owned.get("value", 0) > 5:
+                security_warnings.append(f"⚠️ Owns {owned.get('value')} groups/channels")
+            else:
+                security_passed.append(f"✅ Owned groups: {owned.get('value', 0)}")
+            
+            # Check bot interactions
+            bots = checks.get("bot_chats", {})
+            if bots.get("value", 0) > 5:
+                security_warnings.append(f"⚠️ Many bot interactions: {bots.get('value')}")
+            else:
+                security_passed.append(f"✅ Bot chats: {bots.get('value', 0)}")
+            
+            # Determine overall security level
+            if len(security_issues) > 0:
+                level = "🔴 HIGH RISK"
+            elif len(security_warnings) > 2:
+                level = "🟡 MEDIUM RISK"
+            elif len(security_warnings) > 0:
+                level = "🟢 LOW RISK"
+            else:
+                level = "🟢 SECURE"
+            
+            message = f"🛡️ **Security Analysis**\n\n"
+            message += f"**Risk Level:** {level}\n\n"
+            
+            if security_issues:
+                message += "**Critical Issues:**\n" + "\n".join(security_issues) + "\n\n"
+            
+            if security_warnings:
+                message += "**Warnings:**\n" + "\n".join(security_warnings) + "\n\n"
+            
+            if security_passed:
+                message += "**Passed Checks:**\n" + "\n".join(security_passed[:5])
+            
+            await self.edit_message(event, message, [[Button.inline("🔙 Back", "review_accounts")]])
+            
+        except Exception as e:
+            logger.error(f"Security check error: {str(e)}")
+            await self.edit_message(event, f"❌ Error: {str(e)}", [[Button.inline("🔙 Back", "review_accounts")]])
     async def process_upi_vpa(self, event, user, text_value):
         """Process UPI VPA input"""
         try:
