@@ -330,17 +330,11 @@ Ready to start selling?
             # Skip ToS for OTP flow - show method selection directly
             # ToS will be handled per method if needed
             
-            # Show OTP selling method selection
+            # Show OTP flow directly - no need for method selection
             otp_message = """
 📱 **Sell Account via Phone + OTP**
 
-Choose how you want to provide your account:
-
-**📤 Upload Session**: If you have session files/strings
-**📱 Phone + OTP**: Verify ownership via your phone number
-**📦 TData Archive**: Upload Telegram Desktop data
-
-**Phone + OTP Process:**
+**Process:**
 1. Enter your account's phone number
 2. Receive OTP on your phone
 3. Enter OTP to verify ownership
@@ -348,20 +342,18 @@ Choose how you want to provide your account:
 5. Admin review and approval
 6. Account listed for sale
 
-**Session Upload Process:**
-1. Upload session file or paste session string
-2. Automated verification checks
-3. Admin review and approval
-4. Account listed for sale
+**Requirements:**
+✅ Active Telegram account
+✅ Access to phone number
+✅ Ability to receive SMS/calls
 
-**TData Process:**
-1. Export TData from Telegram Desktop
-2. Create ZIP archive of tdata folder
-3. Upload ZIP file to bot
-4. Automatic conversion and verification
+Ready to start?
             """
             
-            buttons = create_otp_method_keyboard()
+            buttons = [
+                [Button.inline("📱 Continue with Phone + OTP", "use_phone_otp")],
+                [Button.inline("🔙 Back", "back_to_main")]
+            ]
             await self.edit_message(event, otp_message, buttons)
             
         except Exception as e:
