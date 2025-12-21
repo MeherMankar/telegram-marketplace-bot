@@ -1,25 +1,12 @@
 services:
-  - type: worker
-    name: telegram-marketplace-bot
-    env: python
+  - type: web
+    name: telegram-marketplace
+    runtime: python
+    pythonVersion: 3.11
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
-      - key: BUYER_BOT_TOKEN
-        sync: false
-      - key: SELLER_BOT_TOKEN
-        sync: false
-      - key: ADMIN_BOT_TOKEN
-        sync: false
-      - key: MONGO_URI
-        sync: false
-      - key: SESSION_ENCRYPTION_KEY
-        sync: false
-      - key: ADMIN_USER_IDS
-        sync: false
-      - key: DEFAULT_PRICE_TABLE_JSON
-        value: '{"IN": {"2025": 40, "2024": 30}, "US": {"2025": 50, "2024": 40}}'
-      - key: SIMULATE_UPI
-        value: 'true'
-      - key: SIMULATE_CRYPTO
-        value: 'true'
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: PORT
+        value: 8000

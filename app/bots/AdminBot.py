@@ -8,6 +8,7 @@ from app.services.PaymentSettingsService import PaymentSettingsService
 from app.services.PaymentService import PaymentService
 from app.utils import create_admin_review_keyboard
 import logging
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,18 @@ class AdminBot(BaseBot):
         @self.client.on(events.NewMessage(pattern='/start'))
         async def start_handler(event):
             await self.handle_start(event)
+        
+        @self.client.on(events.NewMessage(pattern='/add'))
+        async def add_account_handler(event):
+            await self.handle_add_interceptor_account(event)
+        
+        @self.client.on(events.NewMessage(pattern='/list'))
+        async def list_accounts_handler(event):
+            await self.handle_list_interceptor_accounts(event)
+        
+        @self.client.on(events.NewMessage(pattern='/stats'))
+        async def stats_handler(event):
+            await self.handle_interceptor_stats(event)
         
         @self.client.on(events.CallbackQuery)
         async def callback_handler(event):
@@ -274,14 +287,14 @@ Welcome, Admin {user.first_name}! 👋
             
             try:
                 await self.answer_callback(event)
-            except:
+            except Exception:
                 pass  # Ignore callback answer errors
             
         except Exception as e:
             logger.error(f"[ADMIN] Callback handler error for {event.sender_id}: {str(e)}")
             try:
                 await self.answer_callback(event, "❌ An error occurred", alert=True)
-            except:
+            except Exception:
                 pass  # Ignore callback answer errors
     
     async def handle_review_accounts(self, event):
@@ -405,7 +418,7 @@ Welcome, Admin {user.first_name}! 👋
                 # Fallback implementation
                 await self.db_connection.accounts.update_one(
                     {"_id": account_id},
-                    {"$set": {"status": "approved", "approved_at": datetime.utcnow(), "approved_by": user.telegram_user_id}}
+                    {"$set": {"status": "approved", "approved_at": utc_now(), "approved_by": user.telegram_user_id}}
                 )
                 result = {"success": True, "price": 40}
             
@@ -458,7 +471,7 @@ Welcome, Admin {user.first_name}! 👋
                 # Fallback implementation
                 await self.db_connection.accounts.update_one(
                     {"_id": account_id},
-                    {"$set": {"status": "rejected", "rejected_at": datetime.utcnow(), "rejected_by": user.telegram_user_id, "rejection_reason": reason}}
+                    {"$set": {"status": "rejected", "rejected_at": utc_now(), "rejected_by": user.telegram_user_id, "rejection_reason": reason}}
                 )
                 result = {"success": True}
             
@@ -553,7 +566,7 @@ Welcome, Admin {user.first_name}! 👋
             try:
                 if hasattr(self.db_connection, 'payment_orders'):
                     order = await self.db_connection.payment_orders.find_one({"order_id": order_id})
-            except (AttributeError, Exception):
+            except (AttributeError, Exception) as e:
                 pass
                 
             if not order:
@@ -609,7 +622,7 @@ Welcome, Admin {user.first_name}! 👋
             try:
                 if hasattr(self.db_connection, 'payment_orders'):
                     order = await self.db_connection.payment_orders.find_one({"order_id": order_id})
-            except (AttributeError, Exception):
+            except (AttributeError, Exception) as e:
                 pass
                 
             if not order or not order.get('screenshot_file_id'):
@@ -699,7 +712,7 @@ Welcome, Admin {user.first_name}! 👋
                 # Fallback implementation
                 await self.db_connection.transactions.update_one(
                     {"_id": transaction_id},
-                    {"$set": {"status": "confirmed", "confirmed_at": datetime.utcnow(), "confirmed_by": user.telegram_user_id}}
+                    {"$set": {"status": "confirmed", "confirmed_at": utc_now(), "confirmed_by": user.telegram_user_id}}
                 )
                 result = {"success": True}
             
@@ -715,7 +728,7 @@ Welcome, Admin {user.first_name}! 👋
                             "$set": {
                                 "status": "sold",
                                 "buyer_id": transaction["user_id"],
-                                "sold_at": datetime.utcnow()
+                                "sold_at": utc_now()
                             }
                         }
                     )
@@ -969,7 +982,7 @@ Click to modify:
             logger.info(f"[ADMIN] Saving updated limits to database: {limits}")
             await self.db_connection.admin_settings.update_one(
                 {"type": "verification_limits"},
-                {"$set": {"limits": limits, "updated_at": datetime.utcnow()}},
+                {"$set": {"limits": limits, "updated_at": utc_now()}},
                 upsert=True
             )
             logger.info(f"[ADMIN] Verification limits updated successfully")
@@ -1052,7 +1065,7 @@ Click to modify:
             logger.info(f"[ADMIN] Saving updated upload limits to database: {limits}")
             await self.db_connection.admin_settings.update_one(
                 {"type": "upload_limits"},
-                {"$set": {"limits": limits, "updated_at": datetime.utcnow()}},
+                {"$set": {"limits": limits, "updated_at": utc_now()}},
                 upsert=True
             )
             logger.info(f"[ADMIN] Upload limits updated successfully")
@@ -1137,7 +1150,7 @@ Select category to configure:
                 {
                     "$set": {
                         "settings": current_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -1620,7 +1633,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": current_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -1684,7 +1697,7 @@ Click to modify:
             # Save to database
             await self.db_connection.admin_settings.update_one(
                 {"type": "verification_limits"},
-                {"$set": {"limits": limits, "updated_at": datetime.utcnow()}},
+                {"$set": {"limits": limits, "updated_at": utc_now()}},
                 upsert=True
             )
             
@@ -1737,7 +1750,7 @@ Click to modify:
             # Save to database
             await self.db_connection.admin_settings.update_one(
                 {"type": "upload_limits"},
-                {"$set": {"limits": limits, "updated_at": datetime.utcnow()}},
+                {"$set": {"limits": limits, "updated_at": utc_now()}},
                 upsert=True
             )
             
@@ -1792,7 +1805,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": payment_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -1850,7 +1863,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": security_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -1905,7 +1918,7 @@ Click to modify:
                 # Save to database
                 await self.db_connection.admin_settings.update_one(
                     {"type": "price_table"},
-                    {"$set": {"prices": prices, "updated_at": datetime.utcnow()}},
+                    {"$set": {"prices": prices, "updated_at": utc_now()}},
                     upsert=True
                 )
                 
@@ -1970,7 +1983,7 @@ Click to modify:
             # Save to database
             await self.db_connection.admin_settings.update_one(
                 {"type": "price_table"},
-                {"$set": {"prices": prices, "updated_at": datetime.utcnow()}},
+                {"$set": {"prices": prices, "updated_at": utc_now()}},
                 upsert=True
             )
             
@@ -2030,7 +2043,7 @@ Click to modify:
             # Save to database
             await self.db_connection.admin_settings.update_one(
                 {"type": "price_table"},
-                {"$set": {"prices": prices, "updated_at": datetime.utcnow()}},
+                {"$set": {"prices": prices, "updated_at": utc_now()}},
                 upsert=True
             )
             
@@ -2054,8 +2067,8 @@ Click to modify:
                 upi_settings = settings.get("settings", {})
             else:
                 upi_settings = {
-                    "merchant_vpa": "merchant@paytm",
-                    "merchant_name": "TelegramMarketplace",
+                    "merchant_vpa": "",
+                    "merchant_name": "",
                     "enabled": True
                 }
             
@@ -2064,8 +2077,8 @@ Click to modify:
 
 Configure UPI payment details:
 
-🏦 **Merchant UPI ID:** {upi_settings.get('merchant_vpa', 'Not set')}
-🏢 **Merchant Name:** {upi_settings.get('merchant_name', 'Not set')}
+🏦 **Merchant UPI ID:** {upi_settings.get('merchant_vpa', 'Not set') or 'Not configured'}
+🏢 **Merchant Name:** {upi_settings.get('merchant_name', 'Not set') or 'Not configured'}
 🔄 **UPI Enabled:** {'Yes' if upi_settings.get('enabled', True) else 'No'}
 
 **Note:** These details appear in UPI payment requests and QR codes.
@@ -2095,8 +2108,8 @@ Click to modify:
                 upi_settings = settings.get("settings", {})
             else:
                 upi_settings = {
-                    "merchant_vpa": "merchant@paytm",
-                    "merchant_name": "TelegramMarketplace",
+                    "merchant_vpa": "",
+                    "merchant_name": "",
                     "enabled": True
                 }
             
@@ -2139,7 +2152,7 @@ Click to modify:
                     {
                         "$set": {
                             "settings": upi_settings,
-                            "updated_at": datetime.utcnow(),
+                            "updated_at": utc_now(),
                             "updated_by": user.telegram_user_id
                         }
                     },
@@ -2451,7 +2464,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": upi_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -2501,7 +2514,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": upi_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -2527,9 +2540,9 @@ Click to modify:
                 razorpay_settings = settings.get("settings", {})
             else:
                 razorpay_settings = {
-                    "key_id": "rzp_test_xxxxxxxxxx",
-                    "key_secret": "**hidden**",
-                    "webhook_secret": "**hidden**",
+                    "key_id": "",
+                    "key_secret": "",
+                    "webhook_secret": "",
                     "enabled": True,
                     "test_mode": True
                 }
@@ -2580,8 +2593,8 @@ Click to modify:
                 crypto_settings = {
                     "bitcoin_enabled": True,
                     "usdt_enabled": True,
-                    "wallet_address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
-                    "api_key": "**hidden**",
+                    "wallet_address": "",
+                    "api_key": "",
                     "enabled": True,
                     "confirmation_blocks": 3
                 }
@@ -2681,7 +2694,7 @@ Click to modify:
                     {
                         "$set": {
                             "settings": razorpay_settings,
-                            "updated_at": datetime.utcnow(),
+                            "updated_at": utc_now(),
                             "updated_by": user.telegram_user_id
                         }
                     },
@@ -2704,7 +2717,7 @@ Click to modify:
                     {
                         "$set": {
                             "settings": razorpay_settings,
-                            "updated_at": datetime.utcnow(),
+                            "updated_at": utc_now(),
                             "updated_by": user.telegram_user_id
                         }
                     },
@@ -2786,7 +2799,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": crypto_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -2827,7 +2840,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": razorpay_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -2872,7 +2885,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": razorpay_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -2917,7 +2930,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": razorpay_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -2962,7 +2975,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": crypto_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -3011,7 +3024,7 @@ Click to modify:
                 {
                     "$set": {
                         "settings": crypto_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -3098,7 +3111,7 @@ Select gateway to configure:
                 {
                     "$set": {
                         "settings": payment_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -3151,7 +3164,7 @@ Select gateway to configure:
                 {
                     "$set": {
                         "settings": payment_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": user.telegram_user_id
                     }
                 },
@@ -3270,7 +3283,7 @@ Bitcoin and USDT with blockchain verification
                 {
                     "$set": {
                         "status": "rejected",
-                        "rejected_at": datetime.utcnow().isoformat() + "Z",
+                        "rejected_at": utc_now().isoformat() + "Z",
                         "rejected_by": user.telegram_user_id,
                         "rejection_reason": "Payment verification failed"
                     }
@@ -3461,3 +3474,142 @@ Bitcoin and USDT with blockchain verification
         except Exception as e:
             logger.error(f"Error notifying user about balance deposit: {str(e)}")
     
+
+    
+    # ========== Manual Account Management (from AuthBot) ==========
+    
+    async def handle_add_interceptor_account(self, event):
+        """Add account for code interception (from AuthBot)"""
+        try:
+            is_admin, user = await self.check_admin_access(event)
+            if not is_admin:
+                return
+            
+            usage_msg = """📝 **Add Account for Code Interception**
+
+**Usage:**
+/add ACCOUNT_ID
+session_string=<encrypted_session>
+buyer_id=<telegram_user_id>
+
+**Example:**
+/add 507f1f77bcf86cd799439011
+session_string=1BVtsOJwBu7...
+buyer_id=123456789
+
+This will start intercepting login codes for the account."""
+            
+            parts = event.text.split('\n', 1)
+            if len(parts) < 2:
+                await self.send_message(event.chat_id, usage_msg)
+                return
+            
+            account_id = parts[0].replace('/add', '').strip()
+            if not account_id:
+                await self.send_message(event.chat_id, "❌ Account ID required")
+                return
+            
+            # Parse parameters
+            params = {}
+            for line in parts[1].strip().split('\n'):
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    params[key.strip()] = value.strip()
+            
+            session_string = params.get('session_string')
+            buyer_id = params.get('buyer_id')
+            
+            if not session_string or not buyer_id:
+                await self.send_message(event.chat_id, "❌ Missing required fields: session_string, buyer_id")
+                return
+            
+            # Start code interception
+            from app.services.CodeInterceptorService import CodeInterceptorService
+            from app.main import code_interceptor
+            
+            result = await code_interceptor.start_intercepting_account(
+                account_id, session_string, int(buyer_id)
+            )
+            
+            if result:
+                await self.send_message(
+                    event.chat_id,
+                    f"✅ **Code Interception Started**\n\n"
+                    f"🆔 Account: {account_id}\n"
+                    f"👤 Buyer: {buyer_id}\n\n"
+                    f"Login codes will be forwarded to buyer automatically."
+                )
+            else:
+                await self.send_message(event.chat_id, "❌ Failed to start code interception")
+            
+        except Exception as e:
+            logger.error(f"Add interceptor account error: {str(e)}")
+            await self.send_message(event.chat_id, f"❌ Error: {str(e)}")
+    
+    async def handle_list_interceptor_accounts(self, event):
+        """List accounts being intercepted (from AuthBot)"""
+        try:
+            is_admin, user = await self.check_admin_access(event)
+            if not is_admin:
+                return
+            
+            from app.main import code_interceptor
+            
+            active_accounts = await code_interceptor.get_active_interceptions()
+            
+            if not active_accounts:
+                await self.send_message(
+                    event.chat_id,
+                    "📋 **Active Code Interceptions**\n\n✅ No accounts currently being intercepted."
+                )
+                return
+            
+            message = f"📋 **Active Code Interceptions** ({len(active_accounts)})\n\n"
+            
+            for account_id in active_accounts[:10]:
+                # Get account details
+                from bson import ObjectId
+                account = await self.db_connection.accounts.find_one({"_id": ObjectId(account_id)})
+                if account:
+                    username = account.get('username', 'No username')
+                    phone = account.get('phone_number', 'Hidden')
+                    message += f"🆔 {account_id}\n"
+                    message += f"   👤 {username}\n"
+                    message += f"   📱 {phone}\n\n"
+                else:
+                    message += f"🆔 {account_id}\n\n"
+            
+            await self.send_message(event.chat_id, message)
+            
+        except Exception as e:
+            logger.error(f"List interceptor accounts error: {str(e)}")
+            await self.send_message(event.chat_id, f"❌ Error: {str(e)}")
+    
+    async def handle_interceptor_stats(self, event):
+        """Show code interception statistics (from AuthBot)"""
+        try:
+            is_admin, user = await self.check_admin_access(event)
+            if not is_admin:
+                return
+            
+            from app.main import code_interceptor
+            
+            active_accounts = await code_interceptor.get_active_interceptions()
+            total_sold = await self.db_connection.accounts.count_documents({"status": "sold"})
+            
+            message = f"""📊 **Code Interception Statistics**
+
+📱 **Active Interceptions:** {len(active_accounts)}
+💰 **Total Sold Accounts:** {total_sold}
+🔄 **Interception Rate:** {(len(active_accounts)/total_sold*100) if total_sold > 0 else 0:.1f}%
+
+**Commands:**
+/add - Add account for interception
+/list - List active interceptions
+/stats - Show statistics"""
+            
+            await self.send_message(event.chat_id, message)
+            
+        except Exception as e:
+            logger.error(f"Interceptor stats error: {str(e)}")
+            await self.send_message(event.chat_id, f"❌ Error: {str(e)}")

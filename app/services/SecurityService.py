@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import ipaddress
 from collections import defaultdict
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ class SecurityService:
                     '$set': {
                         'temp_2fa_secret': secret,
                         '2fa_enabled': False,
-                        'updated_at': datetime.utcnow()
+                        'updated_at': utc_now()
                     }
                 },
                 upsert=True
@@ -80,7 +81,7 @@ class SecurityService:
                         '2fa_secret': security_data['temp_2fa_secret'],
                         '2fa_enabled': True,
                         'backup_codes': backup_codes,
-                        'updated_at': datetime.utcnow()
+                        'updated_at': utc_now()
                     },
                     '$unset': {'temp_2fa_secret': ''}
                 }
@@ -141,7 +142,7 @@ class SecurityService:
                 'ip_address': ip_address,
                 'description': description,
                 'added_by': admin_id,
-                'added_at': datetime.utcnow(),
+                'added_at': utc_now(),
                 'is_active': True
             }
             
@@ -185,7 +186,7 @@ class SecurityService:
                 'unusual_hours': True # Activity during unusual hours (2-6 AM)
             }
             
-            current_time = datetime.utcnow()
+            current_time = utc_now()
             hour_ago = current_time - timedelta(hours=1)
             
             suspicious_score = 0
@@ -263,7 +264,7 @@ class SecurityService:
         """Get security logs"""
         try:
             query = {
-                'timestamp': {'$gte': datetime.utcnow() - timedelta(hours=hours)}
+                'timestamp': {'$gte': utc_now() - timedelta(hours=hours)}
             }
             
             if user_id:
@@ -311,7 +312,7 @@ class SecurityService:
                     'profile_complete': False,
                     'document_verified': False,
                     '2fa_enabled': False,
-                    'created_at': datetime.utcnow()
+                    'created_at': utc_now()
                 }
                 await self.db.user_verification.insert_one(user_verification)
             
@@ -333,7 +334,7 @@ class SecurityService:
                     {
                         '$set': {
                             'verification_level': level,
-                            'verified_at': datetime.utcnow()
+                            'verified_at': utc_now()
                         }
                     }
                 )
@@ -368,7 +369,7 @@ class SecurityService:
                         'is_suspended': True,
                         'suspension_reason': 'Suspicious activity detected',
                         'suspension_details': reasons,
-                        'suspended_at': datetime.utcnow()
+                        'suspended_at': utc_now()
                     }
                 }
             )
@@ -382,8 +383,8 @@ class SecurityService:
         """Generate comprehensive security report"""
         try:
             # Get recent security events
-            last_24h = datetime.utcnow() - timedelta(hours=24)
-            last_7d = datetime.utcnow() - timedelta(days=7)
+            last_24h = utc_now() - timedelta(hours=24)
+            last_7d = utc_now() - timedelta(days=7)
             
             # Suspicious activities in last 24h
             recent_suspicious = await self.db.security_logs.count_documents({
@@ -421,7 +422,7 @@ class SecurityService:
             ]).to_list(None)
             
             return {
-                'report_generated_at': datetime.utcnow().isoformat(),
+                'report_generated_at': utc_now().isoformat(),
                 'time_period': '24 hours',
                 'security_metrics': {
                     'suspicious_activities_24h': recent_suspicious,

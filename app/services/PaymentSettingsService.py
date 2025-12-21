@@ -1,6 +1,7 @@
 from datetime import datetime
 import logging
 from typing import Dict, Any, Optional
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class PaymentSettingsService:
                 {
                     "$set": {
                         "settings": settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": updated_by
                     }
                 },
@@ -115,7 +116,7 @@ class PaymentSettingsService:
                 {
                     "$set": {
                         "settings": settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": updated_by
                     }
                 },
@@ -135,7 +136,7 @@ class PaymentSettingsService:
                 {
                     "$set": {
                         "settings": settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": updated_by
                     }
                 },
@@ -155,7 +156,7 @@ class PaymentSettingsService:
                 {
                     "$set": {
                         "settings": settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": updated_by
                     }
                 },

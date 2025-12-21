@@ -5,6 +5,7 @@ import zipfile
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import os
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class ComplianceService:
             ]
             
             # Create export file
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = utc_now().strftime('%Y%m%d_%H%M%S')
             export_filename = f"user_data_export_{user_id}_{timestamp}.json"
             export_path = f"exports/{export_filename}"
             
@@ -75,7 +76,7 @@ class ComplianceService:
                 'action': 'data_export',
                 'request_type': request_type,
                 'export_file': export_path,
-                'timestamp': datetime.utcnow(),
+                'timestamp': utc_now(),
                 'status': 'completed'
             })
             
@@ -109,7 +110,7 @@ class ComplianceService:
                             'phone': 'DELETED',
                             'username': 'DELETED',
                             'session_data': 'DELETED',
-                            'deleted_at': datetime.utcnow()
+                            'deleted_at': utc_now()
                         }
                     }
                 )
@@ -122,7 +123,7 @@ class ComplianceService:
                         '$set': {
                             'buyer_id': 0 if deletion_type == "full" else user_id,
                             'seller_id': 0 if deletion_type == "full" else user_id,
-                            'anonymized_at': datetime.utcnow()
+                            'anonymized_at': utc_now()
                         }
                     }
                 )
@@ -133,7 +134,7 @@ class ComplianceService:
                 deleted_records['support_tickets'] = tickets_result.deleted_count
                 
                 # Delete security logs older than retention period
-                retention_cutoff = datetime.utcnow() - timedelta(days=90)  # Keep recent for security
+                retention_cutoff = utc_now() - timedelta(days=90)  # Keep recent for security
                 security_result = await self.db.security_logs.delete_many({
                     'user_id': user_id,
                     'timestamp': {'$lt': retention_cutoff}
@@ -166,7 +167,7 @@ class ComplianceService:
                 'action': 'data_deletion',
                 'deletion_type': deletion_type,
                 'deleted_records': deleted_records,
-                'timestamp': datetime.utcnow(),
+                'timestamp': utc_now(),
                 'status': 'completed'
             })
             
@@ -290,7 +291,7 @@ class ComplianceService:
             ]
             
             # Generate audit file
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = utc_now().strftime('%Y%m%d_%H%M%S')
             audit_filename = f"audit_trail_{timestamp}.json"
             audit_path = f"audits/{audit_filename}"
             
@@ -302,7 +303,7 @@ class ComplianceService:
                         'start_date': start_date.isoformat(),
                         'end_date': end_date.isoformat()
                     },
-                    'generated_at': datetime.utcnow().isoformat(),
+                    'generated_at': utc_now().isoformat(),
                     'user_filter': user_id,
                     'data': audit_data
                 }, f, indent=2, default=str)
@@ -327,7 +328,7 @@ class ComplianceService:
     async def check_data_retention_compliance(self) -> Dict[str, Any]:
         """Check and enforce data retention policies"""
         try:
-            current_time = datetime.utcnow()
+            current_time = utc_now()
             retention_cutoff = current_time - timedelta(days=self.gdpr_retention_days)
             
             compliance_report = {
@@ -401,7 +402,7 @@ class ComplianceService:
             document_content = documents[document_type]
             
             # Save document
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = utc_now().strftime('%Y%m%d_%H%M%S')
             filename = f"{document_type}_v{version}_{timestamp}.txt"
             filepath = f"legal_documents/{filename}"
             
@@ -415,7 +416,7 @@ class ComplianceService:
                 'document_type': document_type,
                 'version': version,
                 'filepath': filepath,
-                'generated_at': datetime.utcnow(),
+                'generated_at': utc_now(),
                 'status': 'active'
             })
             
@@ -424,7 +425,7 @@ class ComplianceService:
                 'document_type': document_type,
                 'version': version,
                 'filepath': filepath,
-                'generated_at': datetime.utcnow().isoformat()
+                'generated_at': utc_now().isoformat()
             }
             
         except Exception as e:
@@ -437,7 +438,7 @@ class ComplianceService:
             # Move user data to archive collection
             user_data = await self.db.users.find_one({'user_id': user_id})
             if user_data:
-                user_data['archived_at'] = datetime.utcnow()
+                user_data['archived_at'] = utc_now()
                 await self.db.archived_users.insert_one(user_data)
                 await self.db.users.delete_one({'user_id': user_id})
             
@@ -492,7 +493,7 @@ These terms are governed by applicable law.
 
 10. CONTACT
 For questions, contact our support team.
-        """.format(date=datetime.utcnow().strftime('%Y-%m-%d'))
+        """.format(date=utc_now().strftime('%Y-%m-%d'))
     
     def _generate_privacy_policy(self) -> str:
         """Generate Privacy Policy document"""
@@ -540,7 +541,7 @@ Data retained as needed for services and compliance.
 
 10. CONTACT
 For privacy questions, contact our DPO.
-        """.format(date=datetime.utcnow().strftime('%Y-%m-%d'))
+        """.format(date=utc_now().strftime('%Y-%m-%d'))
     
     def _generate_dpa(self) -> str:
         """Generate Data Processing Agreement"""

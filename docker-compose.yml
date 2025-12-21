@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3.9'
 
 services:
   app:
@@ -11,12 +11,19 @@ services:
       - ADMIN_BOT_TOKEN=${ADMIN_BOT_TOKEN}
       - MONGO_URI=${MONGO_URI}
       - SESSION_ENCRYPTION_KEY=${SESSION_ENCRYPTION_KEY}
-
       - ADMIN_USER_IDS=${ADMIN_USER_IDS}
     depends_on:
-      - mongodb
-      - redis
-    restart: unless-stopped
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure:5
+    healthcheck:
+      test: curl -f http://localhost:8000/health || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   mongodb:
     image: mongo:7.0
@@ -29,6 +36,12 @@ services:
     volumes:
       - mongodb_data:/data/db
     restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
   redis:
     image: redis:7.2-alpine
@@ -37,6 +50,12 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    healthcheck:
+      test: redis-cli ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
 volumes:
   mongodb_data:

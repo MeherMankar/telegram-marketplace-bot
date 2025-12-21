@@ -5,6 +5,7 @@ from datetime import datetime
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from app.utils.encryption import encrypt_data, decrypt_data
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class AccountTransferService:
                 "buyer_id": buyer_id,
                 "seller_id": listing["seller_id"],
                 "transfer_data": transfer_data,
-                "transferred_at": datetime.utcnow(),
+                "transferred_at": utc_now(),
                 "status": "completed"
             }
             
@@ -52,7 +53,7 @@ class AccountTransferService:
                     "$set": {
                         "status": "transferred",
                         "transferred_to": buyer_id,
-                        "transferred_at": datetime.utcnow()
+                        "transferred_at": utc_now()
                     }
                 }
             )
@@ -118,7 +119,7 @@ class AccountTransferService:
                 "is_premium": getattr(me, 'premium', False),
                 "dialog_count": len(dialogs),
                 "contact_count": len(contacts),
-                "last_seen": datetime.utcnow().isoformat()
+                "last_seen": utc_now().isoformat()
             }
             
             await client.disconnect()
@@ -161,7 +162,7 @@ class AccountTransferService:
                 "account_id": account["_id"],
                 "transfer_data": transfer_data,
                 "delivered": False,
-                "created_at": datetime.utcnow()
+                "created_at": utc_now()
             }
             
             await self.db_connection.deliveries.insert_one(delivery_data)
@@ -191,7 +192,7 @@ class AccountTransferService:
                 {
                     "$set": {
                         "delivered": True,
-                        "delivered_at": datetime.utcnow()
+                        "delivered_at": utc_now()
                     }
                 }
             )

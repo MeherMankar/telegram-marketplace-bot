@@ -7,6 +7,7 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, P
 from app.utils.UniversalSessionConverter import UniversalSessionConverter
 from app.utils.encryption import encrypt_data
 from app.models import AccountStatus
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +61,8 @@ class AccountLoginService:
                     "phone_number": me.phone,
                     "session_string": encrypted_session,
                     "status": AccountStatus.PENDING,
-                    "created_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow(),
+                    "created_at": utc_now(),
+                    "updated_at": utc_now(),
                     "obtained_via": conversion_result.get("format", "unknown"),
                     "account_info": {
                         "id": me.id,
@@ -191,8 +192,8 @@ class AccountLoginService:
                     "$set": {
                         "status": AccountStatus.SOLD,
                         "buyer_id": buyer_id,
-                        "sold_at": datetime.utcnow(),
-                        "updated_at": datetime.utcnow()
+                        "sold_at": utc_now(),
+                        "updated_at": utc_now()
                     }
                 }
             )

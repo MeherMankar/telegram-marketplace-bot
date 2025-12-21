@@ -6,6 +6,7 @@ from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 import joblib
 import os
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class MLService:
             # Get user's recent activity
             recent_uploads = await self.db.accounts.count_documents({
                 'seller_id': user_id,
-                'created_at': {'$gte': datetime.utcnow() - timedelta(days=1)}
+                'created_at': {'$gte': utc_now() - timedelta(days=1)}
             })
             
             # Fraud indicators

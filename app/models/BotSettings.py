@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from app.utils.datetime_utils import utc_now
 
 @dataclass
 class BotSettings:
@@ -109,7 +110,7 @@ class SettingsManager:
                 {
                     "$set": {
                         "settings": current_settings,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": admin_id
                     }
                 },
@@ -156,7 +157,7 @@ class SettingsManager:
                 {
                     "$set": {
                         "settings": defaults,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": utc_now(),
                         "updated_by": admin_id,
                         "reset_to_defaults": True
                     }

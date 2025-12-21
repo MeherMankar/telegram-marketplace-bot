@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
 from telethon import TelegramClient
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class PaymentVerificationService:
                 'proof_file_id': proof_file_id,
                 'proof_message': proof_message,
                 'status': 'pending',
-                'submitted_at': datetime.utcnow(),
+                'submitted_at': utc_now(),
                 'verified_by': None,
                 'verified_at': None
             }
@@ -109,7 +110,7 @@ class PaymentVerificationService:
                     '$set': {
                         'status': 'approved',
                         'verified_by': admin_id,
-                        'verified_at': datetime.utcnow()
+                        'verified_at': utc_now()
                     }
                 }
             )
@@ -125,7 +126,7 @@ class PaymentVerificationService:
                             'type': 'deposit',
                             'method': verification['payment_method'],
                             'verification_id': verification_id,
-                            'timestamp': datetime.utcnow()
+                            'timestamp': utc_now()
                         }
                     }
                 }
@@ -163,7 +164,7 @@ class PaymentVerificationService:
                     '$set': {
                         'status': 'rejected',
                         'verified_by': admin_id,
-                        'verified_at': datetime.utcnow(),
+                        'verified_at': utc_now(),
                         'rejection_reason': reason
                     }
                 }
@@ -192,7 +193,7 @@ class PaymentVerificationService:
                 'type': 'payment_approved',
                 'message': f"✅ Payment approved! ${verification['amount']} added to your balance.",
                 'amount': verification['amount'],
-                'created_at': datetime.utcnow(),
+                'created_at': utc_now(),
                 'read': False
             })
             
@@ -213,7 +214,7 @@ class PaymentVerificationService:
                 'message': message,
                 'amount': verification['amount'],
                 'reason': reason,
-                'created_at': datetime.utcnow(),
+                'created_at': utc_now(),
                 'read': False
             })
             

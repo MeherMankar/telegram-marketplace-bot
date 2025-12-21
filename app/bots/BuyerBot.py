@@ -12,6 +12,7 @@ from app.utils import create_main_menu, create_country_menu, create_year_menu, c
 import logging
 import os
 import asyncio
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +314,7 @@ Ready to find your perfect account?
                     {
                         "$set": {
                             "screenshot_file_id": file_id,
-                            "screenshot_uploaded_at": datetime.utcnow().isoformat() + "Z",
+                            "screenshot_uploaded_at": utc_now().isoformat() + "Z",
                             "status": "pending_verification"
                         }
                     }
@@ -342,7 +343,7 @@ Ready to find your perfect account?
                 
                 proof_data = {
                     "screenshot_file_id": file_id,
-                    "uploaded_at": datetime.utcnow().isoformat()
+                    "uploaded_at": utc_now().isoformat()
                 }
                 
                 result = await payment_service.submit_payment_proof(
@@ -530,7 +531,7 @@ Ready to find your perfect account?
 
 💰 **Amount:** ₹{amount:.2f} has been deposited into your funds
 🆔 **Order ID:** {order_id}
-📅 **Date:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+📅 **Date:** {utc_now().strftime('%Y-%m-%d %H:%M:%S')} UTC
 
 🎉 Your balance has been updated and is ready to use!
 
@@ -1709,7 +1710,7 @@ Enter the amount you want to deposit (in USD):
                 "payment_method": method,
                 "status": "pending",
                 "payment_reference": payment_result.get("payment_id"),
-                "created_at": datetime.utcnow()
+                "created_at": utc_now()
             }
             
             result = await self.db_connection.transactions.insert_one(transaction_data)
@@ -1772,7 +1773,7 @@ Enter the amount you want to deposit (in USD):
             # Update transaction status
             await self.db_connection.transactions.update_one(
                 {"_id": transaction_id},
-                {"$set": {"status": "pending_verification", "updated_at": datetime.utcnow()}}
+                {"$set": {"status": "pending_verification", "updated_at": utc_now()}}
             )
             
             await self.edit_message(
@@ -1806,7 +1807,7 @@ You can check your balance anytime from the main menu.
         try:
             await self.db_connection.transactions.update_one(
                 {"_id": transaction_id},
-                {"$set": {"status": "pending_verification", "updated_at": datetime.utcnow()}}
+                {"$set": {"status": "pending_verification", "updated_at": utc_now()}}
             )
             
             await self.edit_message(
@@ -1837,7 +1838,7 @@ You'll be notified once the payment is verified.
         try:
             await self.db_connection.transactions.update_one(
                 {"_id": transaction_id},
-                {"$set": {"status": "cancelled", "updated_at": datetime.utcnow()}}
+                {"$set": {"status": "cancelled", "updated_at": utc_now()}}
             )
             
             await self.edit_message(
@@ -2183,7 +2184,7 @@ Proceed with discounted purchase?
                         # Mark as processed
                         await self.db_connection.admin_notifications.update_one(
                             {"_id": notification["_id"]},
-                            {"$set": {"processed": True, "processed_at": datetime.utcnow()}}
+                            {"$set": {"processed": True, "processed_at": utc_now()}}
                         )
                         
                     except Exception as e:

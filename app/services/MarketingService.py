@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import random
 import string
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +22,10 @@ class MarketingService:
                 'type': campaign_type,  # 'discount', 'promotion', 'referral'
                 'target_audience': target_audience,  # 'all', 'sellers', 'buyers', 'new_users'
                 'discount_percent': discount_percent,
-                'start_date': start_date or datetime.utcnow(),
-                'end_date': end_date or (datetime.utcnow() + timedelta(days=7)),
+                'start_date': start_date or utc_now(),
+                'end_date': end_date or (utc_now() + timedelta(days=7)),
                 'created_by': admin_id,
-                'created_at': datetime.utcnow(),
+                'created_at': utc_now(),
                 'status': 'active',
                 'metrics': {
                     'views': 0,
@@ -65,9 +66,9 @@ class MarketingService:
                 'discount_percent': discount_percent,
                 'max_uses': max_uses,
                 'current_uses': 0,
-                'valid_until': valid_until or (datetime.utcnow() + timedelta(days=30)),
+                'valid_until': valid_until or (utc_now() + timedelta(days=30)),
                 'created_by': admin_id,
-                'created_at': datetime.utcnow(),
+                'created_at': utc_now(),
                 'is_active': True,
                 'usage_history': []
             }
@@ -92,7 +93,7 @@ class MarketingService:
             discount_code = await self.db.discount_codes.find_one({
                 'code': code.upper(),
                 'is_active': True,
-                'valid_until': {'$gte': datetime.utcnow()}
+                'valid_until': {'$gte': utc_now()}
             })
             
             if not discount_code:
@@ -117,7 +118,7 @@ class MarketingService:
                     '$push': {
                         'usage_history': {
                             'user_id': user_id,
-                            'used_at': datetime.utcnow(),
+                            'used_at': utc_now(),
                             'original_amount': purchase_amount,
                             'discount_amount': discount_amount
                         }
@@ -152,7 +153,7 @@ class MarketingService:
                         'user_id': user_id,
                         'message': message,
                         'status': 'pending',
-                        'created_at': datetime.utcnow()
+                        'created_at': utc_now()
                     })
                     sent_count += 1
                     
@@ -228,17 +229,17 @@ class MarketingService:
         try:
             # Active sellers (uploaded in last 30 days)
             active_sellers = await self.db.accounts.distinct('user_id', {
-                'upload_date': {'$gte': datetime.utcnow() - timedelta(days=30)}
+                'upload_date': {'$gte': utc_now() - timedelta(days=30)}
             })
             
             # Active buyers (purchased in last 30 days)
             active_buyers = await self.db.transactions.distinct('buyer_id', {
-                'created_at': {'$gte': datetime.utcnow() - timedelta(days=30)}
+                'created_at': {'$gte': utc_now() - timedelta(days=30)}
             })
             
             # New users (registered in last 7 days)
             new_users = await self.db.users.find({
-                'created_at': {'$gte': datetime.utcnow() - timedelta(days=7)}
+                'created_at': {'$gte': utc_now() - timedelta(days=7)}
             }).to_list(None)
             
             # Inactive users (no activity in 30 days)
@@ -251,12 +252,12 @@ class MarketingService:
                 # Check recent activity
                 recent_upload = await self.db.accounts.find_one({
                     'user_id': user_id,
-                    'upload_date': {'$gte': datetime.utcnow() - timedelta(days=30)}
+                    'upload_date': {'$gte': utc_now() - timedelta(days=30)}
                 })
                 
                 recent_purchase = await self.db.transactions.find_one({
                     'buyer_id': user_id,
-                    'created_at': {'$gte': datetime.utcnow() - timedelta(days=30)}
+                    'created_at': {'$gte': utc_now() - timedelta(days=30)}
                 })
                 
                 if not recent_upload and not recent_purchase:
@@ -343,7 +344,7 @@ class MarketingService:
                 message_ids = [msg['_id'] for msg in messages]
                 await self.db.promotional_messages.update_many(
                     {'_id': {'$in': message_ids}},
-                    {'$set': {'status': 'delivered', 'delivered_at': datetime.utcnow()}}
+                    {'$set': {'status': 'delivered', 'delivered_at': utc_now()}}
                 )
             
             return [

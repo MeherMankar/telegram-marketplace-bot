@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from enum import Enum
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,14 @@ class SupportService:
                 'category': category,
                 'priority': priority,
                 'status': TicketStatus.OPEN.value,
-                'created_at': datetime.utcnow(),
-                'updated_at': datetime.utcnow(),
+                'created_at': utc_now(),
+                'updated_at': utc_now(),
                 'messages': [
                     {
                         'sender_id': user_id,
                         'sender_type': 'user',
                         'message': description,
-                        'timestamp': datetime.utcnow()
+                        'timestamp': utc_now()
                     }
                 ],
                 'assigned_to': None,
@@ -73,7 +74,7 @@ class SupportService:
                 'sender_id': sender_id,
                 'sender_type': sender_type,
                 'message': message,
-                'timestamp': datetime.utcnow()
+                'timestamp': utc_now()
             }
             
             await self.db.support_tickets.update_one(
@@ -81,7 +82,7 @@ class SupportService:
                 {
                     '$push': {'messages': new_message},
                     '$set': {
-                        'updated_at': datetime.utcnow(),
+                        'updated_at': utc_now(),
                         'status': TicketStatus.IN_PROGRESS.value if sender_type == 'admin' else TicketStatus.OPEN.value
                     }
                 }
@@ -132,15 +133,15 @@ class SupportService:
                         'status': TicketStatus.RESOLVED.value,
                         'resolution': resolution,
                         'resolved_by': admin_id,
-                        'resolved_at': datetime.utcnow(),
-                        'updated_at': datetime.utcnow()
+                        'resolved_at': utc_now(),
+                        'updated_at': utc_now()
                     },
                     '$push': {
                         'messages': {
                             'sender_id': admin_id,
                             'sender_type': 'admin',
                             'message': f"Ticket resolved: {resolution}",
-                            'timestamp': datetime.utcnow()
+                            'timestamp': utc_now()
                         }
                     }
                 }

@@ -1,10 +1,9 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
+import secrets
 from dotenv import load_dotenv
 from telethon import TelegramClient, events, Button
-from telethon.errors import SessionPasswordNeededError
 from motor.motor_asyncio import AsyncIOMotorClient
 from aiohttp import web
 from app.bots.SellerBot import SellerBot
@@ -21,33 +20,45 @@ from app.services.MarketingService import MarketingService
 from app.services.SecurityService import SecurityService
 from app.services.ComplianceService import ComplianceService
 from app.services.SocialService import SocialService
+from app.services.PaymentTimeoutService import PaymentTimeoutService
+from app.services.MonitoringService import MonitoringService
+from app.services.ReferralService import ReferralService
+from app.services.CodeInterceptorService import CodeInterceptorService
 from app.utils.logger import setup_logger
+from app.utils.error_tracker import ErrorTracker
+from app.utils.encryption_rotation import EncryptionKeyManager
 
 load_dotenv()
 
-# Setup logging
 logger = setup_logger(__name__)
 
-# Load admin user IDs from environment
 admin_user_ids_str = os.getenv('ADMIN_USER_IDS', '')
 admin_user_ids = [int(uid.strip()) for uid in admin_user_ids_str.split(',') if uid.strip()]
 
-print(f"DEBUG: Loaded admin IDs from env: {admin_user_ids}")
+WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET', secrets.token_urlsafe(32))
+
+def verify_webhook_signature(request_body: bytes, signature: str) -> bool:
+    """Verify webhook signature to prevent CSRF"""
+    import hmac
+    import hashlib
+    expected = hmac.new(
+        WEBHOOK_SECRET.encode(),
+        request_body,
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 async def main():
     """Main application entry point"""
     try:
-        # Initialize database connection
         db_connection = DatabaseConnection()
         await db_connection.connect()
         
-        # Get API credentials
         api_id = int(os.getenv('API_ID'))
         api_hash = os.getenv('API_HASH')
         
-        # Initialize all services
         otp_service = OtpService(api_id, api_hash)
-        bulk_service = BulkService(db_connection, None)  # Will set verification_service later
+        bulk_service = BulkService(db_connection, None)
         ml_service = MLService(db_connection)
         backup_service = BackupService(db_connection, api_id, api_hash)
         analytics_service = AnalyticsService(db_connection)
@@ -56,18 +67,28 @@ async def main():
         security_service = SecurityService(db_connection)
         compliance_service = ComplianceService(db_connection)
         social_service = SocialService(db_connection)
+        payment_timeout_service = PaymentTimeoutService(db_connection)
+        monitoring_service = MonitoringService(db_connection)
+        referral_service = ReferralService(db_connection)
+        error_tracker = ErrorTracker(db_connection)
+        encryption_manager = EncryptionKeyManager(db_connection)
+        code_interceptor = CodeInterceptorService(api_id, api_hash, db_connection)
+        code_interceptor = CodeInterceptorService(api_id, api_hash, db_connection)
         
         # Start background tasks
         asyncio.create_task(backup_service.schedule_automatic_backups())
         asyncio.create_task(ml_service.train_models())
+        asyncio.create_task(payment_timeout_service.start_monitoring())
         
-        # Initialize bots with time sync fix
-        await asyncio.sleep(1)  # Time sync fix
+        # Check encryption key rotation
+        if await encryption_manager.should_rotate():
+            logger.info("Encryption key rotation needed")
+            await encryption_manager.rotate_key()
         
-        # Create sessions directory
+        await asyncio.sleep(1)
+        
         os.makedirs('sessions', exist_ok=True)
         
-        # Seller Bot with all services
         seller_bot = SellerBot(
             api_id=api_id,
             api_hash=api_hash,
@@ -80,7 +101,6 @@ async def main():
             social_service=social_service
         )
         
-        # Buyer Bot with all services
         buyer_bot = BuyerBot(
             api_id=api_id,
             api_hash=api_hash,
@@ -92,7 +112,6 @@ async def main():
             support_service=support_service
         )
         
-        # Admin Bot with all services
         admin_bot = None
         admin_token = os.getenv('ADMIN_BOT_TOKEN')
         if admin_token:
@@ -111,26 +130,22 @@ async def main():
                 bulk_service=bulk_service
             )
         
-        # Start all bots
         logger.info("Starting Telegram Account Marketplace...")
         
         tasks = []
         
-        # Start seller bot
         await seller_bot.start()
         tasks.append(seller_bot.run_until_disconnected())
         logger.info("Seller bot started")
         
-        await asyncio.sleep(2)  # Prevent session conflicts
+        await asyncio.sleep(2)
         
-        # Start buyer bot
         await buyer_bot.start()
         tasks.append(buyer_bot.run_until_disconnected())
         logger.info("Buyer bot started")
         
-        await asyncio.sleep(2)  # Prevent session conflicts
+        await asyncio.sleep(2)
         
-        # Start admin bot if configured
         if admin_bot:
             await admin_bot.start()
             tasks.append(admin_bot.run_until_disconnected())
@@ -138,28 +153,37 @@ async def main():
         
         logger.info("All bots are running. Press Ctrl+C to stop.")
         
-        # Optional web server for health checks (only if PORT is set)
-        if os.getenv('PORT'):
-            app = web.Application()
-            app.router.add_get('/', lambda request: web.Response(text="Telegram Bot is running!"))
-            app.router.add_get('/health', lambda request: web.Response(text="OK"))
-            
-            runner = web.AppRunner(app)
-            await runner.setup()
-            site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8000)))
-            await site.start()
-            logger.info(f"Health check server started on port {os.getenv('PORT', 8000)}")
+        port = os.getenv('PORT')
+        if port and port != '8000':
+            try:
+                async def health_handler(request):
+                    return web.Response(text="OK")
+                
+                app = web.Application()
+                app.router.add_get('/health', health_handler)
+                
+                runner = web.AppRunner(app)
+                await runner.setup()
+                site = web.TCPSite(runner, '0.0.0.0', int(port))
+                await site.start()
+                logger.info(f"Health check server started on port {port}")
+            except OSError as e:
+                logger.warning(f"Web server failed to start: {e}")
         
-        # Run all bots concurrently
         await asyncio.gather(*tasks)
         
     except KeyboardInterrupt:
         logger.info("Shutting down...")
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        raise
+    except OSError as e:
+        logger.error(f"System error: {e}")
+        raise
     except Exception as e:
-        logger.error(f"Application error: {e}")
+        logger.error(f"Application error: {e}", exc_info=True)
         raise
     finally:
-        # Cleanup
         if 'db_connection' in locals():
             await db_connection.close()
 

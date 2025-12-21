@@ -10,13 +10,13 @@ from typing import Optional, Dict, Any, Union
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.crypto import AuthKey
+from app.utils.security_utils import validate_path, safe_join_path
 
 logger = logging.getLogger(__name__)
 
 class UniversalSessionConverter:
     """Enhanced session converter supporting multiple formats"""
     
-    # DC server mappings
     DC_SERVERS = {
         1: ('149.154.175.53', 443),
         2: ('149.154.167.51', 443),
@@ -47,8 +47,14 @@ class UniversalSessionConverter:
             else:
                 return {"success": False, "error": f"Unsupported session type: {source_type}"}
                 
+        except ValueError as e:
+            logger.error(f"Session conversion validation error: {e}")
+            return {"success": False, "error": str(e)}
+        except OSError as e:
+            logger.error(f"Session conversion IO error: {e}")
+            return {"success": False, "error": str(e)}
         except Exception as e:
-            logger.error(f"Session conversion failed: {e}")
+            logger.error(f"Session conversion failed: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
     
     @classmethod
@@ -58,30 +64,25 @@ class UniversalSessionConverter:
             return "session_bytes"
         
         if isinstance(source, str):
-            # Check if it's a file path
             if os.path.exists(source):
                 if os.path.isdir(source):
-                    # Check for TData
                     if os.path.exists(os.path.join(source, "key_datas")):
                         return "tdata"
                 elif source.endswith('.session'):
-                    # Determine if Telethon or Pyrogram
                     return cls._detect_sqlite_session_type(source)
                 elif source.endswith('.json'):
                     return "json_session"
             
-            # Check if it's a session string
             try:
                 base64.urlsafe_b64decode(source + '==')
                 return "telethon_string"
-            except:
+            except (ValueError, TypeError):
                 pass
             
-            # Check if it's JSON string
             try:
                 json.loads(source)
                 return "json_session"
-            except:
+            except (ValueError, TypeError):
                 pass
         
         return "unknown"
@@ -100,34 +101,29 @@ class UniversalSessionConverter:
                 cursor.execute("PRAGMA table_info(sessions)")
                 columns = [row[1] for row in cursor.fetchall()]
                 
-                # Pyrogram has different column structure
-                if 'user_id' in columns or 'is_bot' in columns:
-                    conn.close()
-                    return "pyrogram_session"
-                else:
-                    conn.close()
-                    return "telethon_session"
+                result = "pyrogram_session" if 'user_id' in columns or 'is_bot' in columns else "telethon_session"
+            else:
+                result = "telethon_session"
             
-            conn.close()
-            return "telethon_session"
-            
-        except Exception:
-            return "telethon_session"
+            return result
+        finally:
+            try:
+                conn.close()
+            except (NameError, sqlite3.ProgrammingError):
+                pass
     
     @classmethod
     async def _convert_telethon_string(cls, session_string: str) -> Dict[str, Any]:
         """Convert Telethon string session"""
+        client = None
         try:
-            # Validate session
             client = TelegramClient(StringSession(session_string), 0, "")
             await client.connect()
             
             if not await client.is_user_authorized():
-                await client.disconnect()
                 return {"success": False, "error": "Session not authorized"}
             
             me = await client.get_me()
-            await client.disconnect()
             
             return {
                 "success": True,
@@ -139,56 +135,67 @@ class UniversalSessionConverter:
                 "phone_number": me.phone,
                 "format": "telethon_string"
             }
+        except ValueError as e:
+            return {"success": False, "error": f"Telethon string validation failed: {str(e)}"}
+        except OSError as e:
+            return {"success": False, "error": f"Telethon connection failed: {str(e)}"}
         except Exception as e:
-            return {"success": False, "error": f"Telethon string conversion failed: {str(e)}"}
+            return {"success": False, "error": f"Telethon conversion failed: {str(e)}"}
+        finally:
+            if client:
+                try:
+                    await client.disconnect()
+                except (OSError, RuntimeError):
+                    pass
     
     @classmethod
     async def _convert_pyrogram_session(cls, session_file: str) -> Dict[str, Any]:
         """Enhanced Pyrogram session conversion"""
+        conn = None
         try:
             conn = sqlite3.connect(session_file)
             cursor = conn.cursor()
             
-            # Get session data
             cursor.execute("SELECT dc_id, auth_key FROM sessions LIMIT 1")
             row = cursor.fetchone()
             
             if not row:
-                conn.close()
                 return {"success": False, "error": "No session data found"}
             
             dc_id, auth_key_data = row
             
-            # Handle different auth_key formats
             if isinstance(auth_key_data, str):
                 auth_key = base64.b64decode(auth_key_data)
             elif isinstance(auth_key_data, bytes):
                 auth_key = auth_key_data
             else:
-                conn.close()
                 return {"success": False, "error": "Invalid auth_key format"}
             
-            conn.close()
-            
-            # Get server info
             server_address, port = cls.DC_SERVERS.get(dc_id, ('149.154.167.50', 443))
             
-            # Create Telethon session
             session = StringSession()
             session.set_dc(dc_id, server_address, port)
             session.auth_key = AuthKey(auth_key)
             
             session_string = StringSession.save(session)
             
-            # Validate converted session
             return await cls._convert_telethon_string(session_string)
             
+        except (ValueError, OSError) as e:
+            return {"success": False, "error": f"Pyrogram conversion failed: {str(e)}"}
         except Exception as e:
             return {"success": False, "error": f"Pyrogram conversion failed: {str(e)}"}
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except (sqlite3.ProgrammingError, OSError):
+                    pass
     
     @classmethod
     async def _convert_telethon_session(cls, session_file: str) -> Dict[str, Any]:
         """Convert Telethon .session file"""
+        conn = None
         try:
             conn = sqlite3.connect(session_file)
             cursor = conn.cursor()
@@ -197,13 +204,10 @@ class UniversalSessionConverter:
             session_data = cursor.fetchone()
             
             if not session_data:
-                conn.close()
                 return {"success": False, "error": "No session data found"}
             
             dc_id, server_address, port, auth_key = session_data[:4]
-            conn.close()
             
-            # Create session string
             session = StringSession()
             session.set_dc(dc_id, str(server_address), port)
             session.auth_key = AuthKey(auth_key)
@@ -212,8 +216,16 @@ class UniversalSessionConverter:
             
             return await cls._convert_telethon_string(session_string)
             
+        except (ValueError, OSError) as e:
+            return {"success": False, "error": f"Telethon session conversion failed: {str(e)}"}
         except Exception as e:
             return {"success": False, "error": f"Telethon session conversion failed: {str(e)}"}
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except (sqlite3.ProgrammingError, OSError):
+                    pass
     
     @classmethod
     def _convert_tdata(cls, tdata_path: str) -> Dict[str, Any]:
@@ -223,14 +235,12 @@ class UniversalSessionConverter:
             if not tdata_dir.exists():
                 return {"success": False, "error": "TData directory not found"}
             
-            # Method 1: Try key_datas file
             key_datas_file = tdata_dir / "key_datas"
             if key_datas_file.exists():
                 result = cls._parse_key_datas(key_datas_file)
                 if result.get("success"):
                     return result
             
-            # Method 2: Try map files (alternative TData structure)
             map_files = list(tdata_dir.glob("map*"))
             if map_files:
                 result = cls._parse_map_files(map_files)
@@ -239,6 +249,8 @@ class UniversalSessionConverter:
             
             return {"success": False, "error": "Could not parse TData structure"}
             
+        except (ValueError, OSError) as e:
+            return {"success": False, "error": f"TData conversion failed: {str(e)}"}
         except Exception as e:
             return {"success": False, "error": f"TData conversion failed: {str(e)}"}
     
@@ -252,7 +264,6 @@ class UniversalSessionConverter:
             if len(data) < 300:
                 return {"success": False, "error": "key_datas file too small"}
             
-            # Multiple parsing strategies
             strategies = [
                 cls._parse_key_datas_v1,
                 cls._parse_key_datas_v2,
@@ -264,11 +275,13 @@ class UniversalSessionConverter:
                     result = strategy(data)
                     if result.get("success"):
                         return result
-                except Exception:
+                except (ValueError, RuntimeError, OSError, IOError, struct.error):
                     continue
             
             return {"success": False, "error": "All key_datas parsing strategies failed"}
             
+        except (ValueError, OSError, IOError) as e:
+            return {"success": False, "error": f"key_datas parsing failed: {str(e)}"}
         except Exception as e:
             return {"success": False, "error": f"key_datas parsing failed: {str(e)}"}
     
@@ -282,10 +295,9 @@ class UniversalSessionConverter:
         if dc_id not in [1, 2, 3, 4, 5]:
             raise ValueError(f"Invalid DC ID: {dc_id}")
         
-        # Search for 256-byte auth key
         for i in range(offset, len(data) - 256):
             auth_key = data[i:i+256]
-            if auth_key != b'\\x00' * 256 and len(set(auth_key)) > 10:
+            if auth_key != b'\x00' * 256 and len(set(auth_key)) > 10:
                 return cls._create_session_from_tdata(dc_id, auth_key)
         
         raise ValueError("Auth key not found")
@@ -293,7 +305,7 @@ class UniversalSessionConverter:
     @classmethod
     def _parse_key_datas_v2(cls, data: bytes) -> Dict[str, Any]:
         """Alternative parsing method - skip more header bytes"""
-        offset = 16  # Skip more header
+        offset = 16
         
         if len(data) < offset + 4:
             raise ValueError("Insufficient data")
@@ -301,16 +313,14 @@ class UniversalSessionConverter:
         dc_id = struct.unpack('<I', data[offset:offset+4])[0]
         
         if dc_id not in [1, 2, 3, 4, 5]:
-            # Try big endian
             dc_id = struct.unpack('>I', data[offset:offset+4])[0]
             if dc_id not in [1, 2, 3, 4, 5]:
                 raise ValueError(f"Invalid DC ID: {dc_id}")
         
-        # Look for auth key after DC ID
         offset += 4
         for i in range(offset, len(data) - 256, 4):
             auth_key = data[i:i+256]
-            if len(set(auth_key)) > 20:  # More entropy check
+            if len(set(auth_key)) > 20:
                 return cls._create_session_from_tdata(dc_id, auth_key)
         
         raise ValueError("Auth key not found")
@@ -318,12 +328,10 @@ class UniversalSessionConverter:
     @classmethod
     def _parse_key_datas_v3(cls, data: bytes) -> Dict[str, Any]:
         """Pattern-based parsing method"""
-        # Look for DC ID patterns
         for offset in range(0, min(100, len(data) - 260), 4):
             try:
                 dc_id = struct.unpack('<I', data[offset:offset+4])[0]
                 if 1 <= dc_id <= 5:
-                    # Found potential DC ID, look for auth key nearby
                     search_start = max(0, offset - 50)
                     search_end = min(len(data) - 256, offset + 100)
                     
@@ -331,7 +339,7 @@ class UniversalSessionConverter:
                         auth_key = data[i:i+256]
                         if len(set(auth_key)) > 15:
                             return cls._create_session_from_tdata(dc_id, auth_key)
-            except:
+            except (struct.error, ValueError):
                 continue
         
         raise ValueError("No valid DC ID and auth key combination found")
@@ -358,8 +366,6 @@ class UniversalSessionConverter:
     @classmethod
     def _parse_map_files(cls, map_files: list) -> Dict[str, Any]:
         """Parse alternative TData map files"""
-        # Implementation for map-based TData parsing
-        # This would be used for newer TData formats
         return {"success": False, "error": "Map file parsing not implemented"}
     
     @classmethod
@@ -372,11 +378,9 @@ class UniversalSessionConverter:
             else:
                 session_data = json.loads(json_source)
             
-            # Handle different JSON formats
             if 'session_string' in session_data:
                 return await cls._convert_telethon_string(session_data['session_string'])
             elif 'auth_key' in session_data and 'dc_id' in session_data:
-                # Custom JSON format
                 dc_id = session_data['dc_id']
                 auth_key = base64.b64decode(session_data['auth_key'])
                 
@@ -391,6 +395,8 @@ class UniversalSessionConverter:
             else:
                 return {"success": False, "error": "Unsupported JSON session format"}
                 
+        except (ValueError, OSError, json.JSONDecodeError) as e:
+            return {"success": False, "error": f"JSON session conversion failed: {str(e)}"}
         except Exception as e:
             return {"success": False, "error": f"JSON session conversion failed: {str(e)}"}
     
@@ -415,24 +421,29 @@ class UniversalSessionConverter:
             
             return {"success": True, "info": info}
             
+        except (ValueError, OSError) as e:
+            return {"success": False, "error": str(e)}
         except Exception as e:
             return {"success": False, "error": str(e)}
     
     @classmethod
     async def _convert_session_bytes(cls, session_data: bytes) -> Dict[str, Any]:
         """Convert session bytes to session string"""
+        temp_path = None
         try:
-            # Save bytes to temp file and convert
             temp_path = f"temp_session_{os.getpid()}.session"
             with open(temp_path, 'wb') as f:
                 f.write(session_data)
             
             result = await cls.convert_session(temp_path, "auto")
-            
-            # Cleanup
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            
             return result
+        except (ValueError, OSError, IOError) as e:
+            return {"success": False, "error": f"Session bytes conversion failed: {str(e)}"}
         except Exception as e:
             return {"success": False, "error": f"Session bytes conversion failed: {str(e)}"}
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except (OSError, IOError):
+                    pass

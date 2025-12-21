@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List
 import pandas as pd
 from collections import defaultdict
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ class AnalyticsService:
     async def get_revenue_analytics(self, days: int = 30) -> Dict[str, Any]:
         """Get revenue analytics for specified period"""
         try:
-            start_date = datetime.utcnow() - timedelta(days=days)
+            start_date = utc_now() - timedelta(days=days)
             
             # Get completed transactions
             transactions = await self.db.transactions.find({
@@ -86,11 +87,11 @@ class AnalyticsService:
             
             # Activity metrics
             active_sellers = await self.db.accounts.distinct('user_id', {
-                'upload_date': {'$gte': datetime.utcnow() - timedelta(days=30)}
+                'upload_date': {'$gte': utc_now() - timedelta(days=30)}
             })
             
             active_buyers = await self.db.transactions.distinct('buyer_id', {
-                'created_at': {'$gte': datetime.utcnow() - timedelta(days=30)}
+                'created_at': {'$gte': utc_now() - timedelta(days=30)}
             })
             
             # Upload patterns
@@ -190,7 +191,7 @@ class AnalyticsService:
             
             # Recent activity
             recent_transactions = await self.db.transactions.find({
-                'created_at': {'$gte': datetime.utcnow() - timedelta(hours=24)}
+                'created_at': {'$gte': utc_now() - timedelta(hours=24)}
             }).sort('created_at', -1).limit(10).to_list(None)
             
             return {
@@ -215,7 +216,7 @@ class AnalyticsService:
                     }
                     for t in recent_transactions
                 ],
-                'generated_at': datetime.utcnow().isoformat()
+                'generated_at': utc_now().isoformat()
             }
             
         except Exception as e:
@@ -241,7 +242,7 @@ class AnalyticsService:
             daily_growth = growth_rate / 30  # Convert monthly to daily
             
             forecast = {}
-            current_date = datetime.utcnow()
+            current_date = utc_now()
             
             for i in range(days_ahead):
                 future_date = current_date + timedelta(days=i+1)

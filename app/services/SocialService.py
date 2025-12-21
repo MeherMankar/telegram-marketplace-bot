@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class SocialService:
                 'transaction_id': transaction_id,
                 'rating': rating,
                 'review': review,
-                'created_at': datetime.utcnow(),
+                'created_at': utc_now(),
                 'is_verified': True  # Since it's based on actual transaction
             }
             
@@ -195,7 +196,7 @@ class SocialService:
             # Account age and activity (20 points max)
             user = await self.db.users.find_one({'user_id': user_id})
             if user and user.get('created_at'):
-                days_active = (datetime.utcnow() - user['created_at']).days
+                days_active = (utc_now() - user['created_at']).days
                 activity_score = min(days_active / 30, 1) * 20  # Max at 30 days
                 reputation_score += activity_score
             
@@ -251,7 +252,7 @@ class SocialService:
                 'target_id': target_id,
                 'content': content,
                 'status': 'pending',
-                'created_at': datetime.utcnow(),
+                'created_at': utc_now(),
                 'reviewed_by': None,
                 'reviewed_at': None
             }
@@ -288,7 +289,7 @@ class SocialService:
             
             # Account age badge
             if user.get('created_at'):
-                days_active = (datetime.utcnow() - user['created_at']).days
+                days_active = (utc_now() - user['created_at']).days
                 if days_active >= 365:
                     badges.append({
                         'name': 'Veteran Member',
@@ -312,7 +313,7 @@ class SocialService:
                         'name': 'Phone Verified',
                         'icon': '📱',
                         'description': 'Phone number verified',
-                        'earned_at': user_verification.get('phone_verified_at', datetime.utcnow()).isoformat()
+                        'earned_at': user_verification.get('phone_verified_at', utc_now()).isoformat()
                     })
                 
                 if user_verification.get('2fa_enabled'):
@@ -320,7 +321,7 @@ class SocialService:
                         'name': 'Security Enhanced',
                         'icon': '🔐',
                         'description': '2FA enabled for extra security',
-                        'earned_at': user_verification.get('2fa_enabled_at', datetime.utcnow()).isoformat()
+                        'earned_at': user_verification.get('2fa_enabled_at', utc_now()).isoformat()
                     })
             
             # Sales badges
@@ -334,21 +335,21 @@ class SocialService:
                     'name': 'Super Seller',
                     'icon': '🏆',
                     'description': '100+ successful sales',
-                    'earned_at': datetime.utcnow().isoformat()
+                    'earned_at': utc_now().isoformat()
                 })
             elif completed_sales >= 50:
                 badges.append({
                     'name': 'Top Seller',
                     'icon': '⭐',
                     'description': '50+ successful sales',
-                    'earned_at': datetime.utcnow().isoformat()
+                    'earned_at': utc_now().isoformat()
                 })
             elif completed_sales >= 10:
                 badges.append({
                     'name': 'Active Seller',
                     'icon': '✅',
                     'description': '10+ successful sales',
-                    'earned_at': datetime.utcnow().isoformat()
+                    'earned_at': utc_now().isoformat()
                 })
             
             # Rating badges
@@ -358,7 +359,7 @@ class SocialService:
                     'name': 'Highly Rated',
                     'icon': '🌟',
                     'description': '4.5+ stars with 10+ ratings',
-                    'earned_at': datetime.utcnow().isoformat()
+                    'earned_at': utc_now().isoformat()
                 })
             
             # Purchase badges
@@ -372,14 +373,14 @@ class SocialService:
                     'name': 'VIP Buyer',
                     'icon': '💎',
                     'description': '50+ purchases made',
-                    'earned_at': datetime.utcnow().isoformat()
+                    'earned_at': utc_now().isoformat()
                 })
             elif completed_purchases >= 10:
                 badges.append({
                     'name': 'Regular Buyer',
                     'icon': '🛒',
                     'description': '10+ purchases made',
-                    'earned_at': datetime.utcnow().isoformat()
+                    'earned_at': utc_now().isoformat()
                 })
             
             return badges
@@ -394,10 +395,10 @@ class SocialService:
             # User statistics
             total_users = await self.db.users.count_documents({})
             active_sellers = await self.db.accounts.distinct('user_id', {
-                'upload_date': {'$gte': datetime.utcnow() - timedelta(days=30)}
+                'upload_date': {'$gte': utc_now() - timedelta(days=30)}
             })
             active_buyers = await self.db.transactions.distinct('buyer_id', {
-                'created_at': {'$gte': datetime.utcnow() - timedelta(days=30)}
+                'created_at': {'$gte': utc_now() - timedelta(days=30)}
             })
             
             # Rating statistics
@@ -436,11 +437,11 @@ class SocialService:
             
             # Recent community activity
             recent_ratings = await self.db.user_ratings.count_documents({
-                'created_at': {'$gte': datetime.utcnow() - timedelta(days=7)}
+                'created_at': {'$gte': utc_now() - timedelta(days=7)}
             })
             
             recent_feedback = await self.db.community_feedback.count_documents({
-                'created_at': {'$gte': datetime.utcnow() - timedelta(days=7)}
+                'created_at': {'$gte': utc_now() - timedelta(days=7)}
             })
             
             return {
@@ -456,7 +457,7 @@ class SocialService:
                     'new_ratings_7d': recent_ratings,
                     'community_feedback_7d': recent_feedback
                 },
-                'generated_at': datetime.utcnow().isoformat()
+                'generated_at': utc_now().isoformat()
             }
             
         except Exception as e:
@@ -484,7 +485,7 @@ class SocialService:
                         '$set': {
                             'total_ratings': stats[0]['total_ratings'],
                             'average_rating': stats[0]['average_rating'],
-                            'updated_at': datetime.utcnow()
+                            'updated_at': utc_now()
                         }
                     },
                     upsert=True

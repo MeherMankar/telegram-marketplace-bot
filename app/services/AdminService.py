@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from app.services.ListingService import ListingService
 from app.services.OtpService import OtpService
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class AdminService:
                 {
                     "$set": {
                         "status": "approved",
-                        "approved_at": datetime.utcnow(),
+                        "approved_at": utc_now(),
                         "approved_by": admin_id
                     }
                 }
@@ -60,7 +61,7 @@ class AdminService:
                 {
                     "$set": {
                         "status": "rejected",
-                        "rejected_at": datetime.utcnow(),
+                        "rejected_at": utc_now(),
                         "rejected_by": admin_id,
                         "rejection_reason": reason
                     }
@@ -81,7 +82,7 @@ class AdminService:
                 {
                     "$set": {
                         "status": "approved",
-                        "approved_at": datetime.utcnow(),
+                        "approved_at": utc_now(),
                         "approved_by": admin_id
                     }
                 }

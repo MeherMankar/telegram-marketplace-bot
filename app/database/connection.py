@@ -72,6 +72,11 @@ class DatabaseConnection:
         self.upi_orders = self.db.upi_orders
         self.payment_orders = self.db.payment_orders
         self.admin_notifications = self.db.admin_notifications
+        self.encryption_keys = self.db.encryption_keys
+        self.error_logs = self.db.error_logs
+        self.metrics = self.db.metrics
+        self.referrals = self.db.referrals
+        self.bot_settings = self.db.bot_settings
         
         await self._create_indexes()
     

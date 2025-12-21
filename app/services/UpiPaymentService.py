@@ -12,6 +12,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="razorpay")
 import razorpay
 import aiohttp
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -107,15 +108,21 @@ class UpiPaymentService:
             })
             
             # Create timestamps
-            created_at = datetime.utcnow()
+            created_at = utc_now()
             expires_at = created_at + timedelta(minutes=15)
             
             # Load UPI settings
             await self.load_upi_settings()
             
             # Create UPI payment link
-            merchant_vpa = self.merchant_vpa or 'merchant@paytm'
-            merchant_name = self.merchant_name or 'TelegramMarketplace'
+            merchant_vpa = self.merchant_vpa
+            merchant_name = self.merchant_name
+            
+            if not merchant_vpa or not merchant_name:
+                return {
+                    "error": "UPI_NOT_CONFIGURED",
+                    "message": "UPI is not configured. Please contact admin to set merchant details."
+                }
             upi_link = f"upi://pay?pa={merchant_vpa}&pn={merchant_name}&tr={order_id}&am={amount:.2f}&cu=INR&tn=Account Deposit"
             
             # Generate QR code
@@ -167,15 +174,21 @@ class UpiPaymentService:
             order_id = self._generate_order_id()
             
             # Create timestamps
-            created_at = datetime.utcnow()
+            created_at = utc_now()
             expires_at = created_at + timedelta(minutes=15)
             
             # Load UPI settings
             await self.load_upi_settings()
             
             # Create UPI payment link (without amount for open payment)
-            merchant_vpa = self.merchant_vpa or 'merchant@paytm'
-            merchant_name = self.merchant_name or 'TelegramMarketplace'
+            merchant_vpa = self.merchant_vpa
+            merchant_name = self.merchant_name
+            
+            if not merchant_vpa or not merchant_name:
+                return {
+                    "error": "UPI_NOT_CONFIGURED",
+                    "message": "UPI is not configured. Please contact admin to set merchant details."
+                }
             upi_link = f"upi://pay?pa={merchant_vpa}&pn={merchant_name}&tr={order_id}&cu=INR&tn=Account Deposit"
             
             # Generate QR code
@@ -265,7 +278,7 @@ Powered by UPI - India's trusted payment system"""
             
             # Check if expired
             expires_at = datetime.fromisoformat(order["expires_at"].replace("Z", ""))
-            if datetime.utcnow() > expires_at:
+            if utc_now() > expires_at:
                 await self.db_connection.upi_orders.update_one(
                     {"order_id": order_id},
                     {"$set": {"status": "expired"}}
@@ -289,7 +302,7 @@ Powered by UPI - India's trusted payment system"""
                                         "$set": {
                                             "status": "success",
                                             "payment_id": payment['id'],
-                                            "verified_at": datetime.utcnow().isoformat() + "Z"
+                                            "verified_at": utc_now().isoformat() + "Z"
                                         }
                                     }
                                 )
@@ -341,7 +354,7 @@ Thank you for your payment! 🎉"""
     
     def _generate_order_id(self) -> str:
         """Generate order ID in format ORD{YYYYMMDDHHMMSS}{8DIGITS_RANDOM}"""
-        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        timestamp = utc_now().strftime("%Y%m%d%H%M%S")
         random_digits = f"{random.randint(10000000, 99999999)}"
         return f"ORD{timestamp}{random_digits}"
     
@@ -373,7 +386,7 @@ Thank you for your payment! 🎉"""
                             "$set": {
                                 "status": "success",
                                 "payment_id": payment_data.get('id'),
-                                "verified_at": datetime.utcnow().isoformat() + "Z"
+                                "verified_at": utc_now().isoformat() + "Z"
                             }
                         }
                     )
@@ -402,7 +415,7 @@ Thank you for your payment! 🎉"""
                     "$set": {
                         "status": "success",
                         "verified_amount": verified_amount,
-                        "verified_at": datetime.utcnow().isoformat() + "Z",
+                        "verified_at": utc_now().isoformat() + "Z",
                         "admin_verified": True
                     }
                 }
@@ -418,7 +431,7 @@ Thank you for your payment! 🎉"""
                 await self.db_connection.users.insert_one({
                     "telegram_user_id": user_id,
                     "balance": verified_amount,
-                    "created_at": datetime.utcnow()
+                    "created_at": utc_now()
                 })
                 new_balance = verified_amount
             else:
@@ -438,8 +451,8 @@ Thank you for your payment! 🎉"""
                 "payment_method": "upi",
                 "status": "confirmed",
                 "order_id": order_id,
-                "created_at": datetime.utcnow(),
-                "verified_at": datetime.utcnow()
+                "created_at": utc_now(),
+                "verified_at": utc_now()
             }
             
             await self.db_connection.transactions.insert_one(transaction_data)
@@ -452,7 +465,7 @@ Thank you for your payment! 🎉"""
                     "amount": verified_amount,
                     "new_balance": new_balance,
                     "order_id": order_id,
-                    "created_at": datetime.utcnow(),
+                    "created_at": utc_now(),
                     "processed": False
                 })
                 logger.info(f"Created balance notification for user {user_id}: ₹{verified_amount}")

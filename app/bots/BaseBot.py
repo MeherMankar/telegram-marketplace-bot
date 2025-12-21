@@ -1,12 +1,9 @@
 import asyncio
 import logging
-import os
 from telethon import TelegramClient, events, Button
-from telethon.sessions import StringSession
 from app.database.connection import db
 from app.models import User
-from app.services import AdminService
-from datetime import datetime
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +23,8 @@ class BaseBot:
             logger.warning(f"{self.bot_name} token not provided, skipping")
             return
         
-        # Add delay for time sync
         await asyncio.sleep(1)
         
-        # Create unique session file path for each bot
         session_name = f'sessions/{self.bot_name.lower()}_bot'
         self.client = TelegramClient(session_name, self.api_id, self.api_hash,
                                    system_version="4.16.30-vxCUSTOM",
@@ -38,7 +33,6 @@ class BaseBot:
         
         await self.client.start(bot_token=self.bot_token)
         
-        # Register event handlers AFTER client is started
         self.register_handlers()
         
         logger.info(f"{self.bot_name} bot started and handlers registered")
@@ -59,13 +53,11 @@ class BaseBot:
             
             logger.info(f"[{self.bot_name}] User data: {event.sender.first_name} (@{event.sender.username})")
             
-            # First, clean up any records with null user_id to prevent duplicate key errors
             try:
                 await self.db_connection.users.delete_many({"user_id": None})
-            except:
+            except (ValueError, OSError) as e:
                 pass
             
-            # Use upsert to safely create or update user
             result = await self.db_connection.users.update_one(
                 {"telegram_user_id": event.sender_id},
                 {
@@ -80,7 +72,7 @@ class BaseBot:
                         "is_admin": False,
                         "balance": 0.0,
                         "upload_count_today": 0,
-                        "created_at": datetime.utcnow(),
+                        "created_at": utc_now(),
                         "tos_accepted": None,
                         "last_upload_date": None
                     },
@@ -89,14 +81,11 @@ class BaseBot:
                 upsert=True
             )
             
-            # Get the user record
             user_doc = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
             
             if not user_doc:
-                # Fallback: try to find by old user_id field
                 user_doc = await self.db_connection.users.find_one({"user_id": event.sender_id})
                 if user_doc:
-                    # Migrate the record
                     await self.db_connection.users.update_one(
                         {"_id": user_doc["_id"]},
                         {
@@ -107,9 +96,8 @@ class BaseBot:
                     user_doc["telegram_user_id"] = event.sender_id
             
             if not user_doc:
-                raise Exception(f"Failed to create or find user {event.sender_id}")
+                raise ValueError(f"Failed to create or find user {event.sender_id}")
             
-            # Ensure all required fields exist with defaults
             user_dict = {
                 "_id": user_doc.get("_id"),
                 "telegram_user_id": user_doc.get("telegram_user_id"),
@@ -120,7 +108,7 @@ class BaseBot:
                 "is_admin": user_doc.get("is_admin", False),
                 "balance": user_doc.get("balance", 0.0),
                 "tos_accepted": user_doc.get("tos_accepted"),
-                "created_at": user_doc.get("created_at", datetime.utcnow()),
+                "created_at": user_doc.get("created_at", utc_now()),
                 "upload_count_today": user_doc.get("upload_count_today", 0),
                 "last_upload_date": user_doc.get("last_upload_date")
             }
@@ -129,57 +117,14 @@ class BaseBot:
             logger.info(f"[{self.bot_name}] User ready: {user.telegram_user_id} - {user.first_name}")
             return user
                 
+        except ValueError as e:
+            logger.error(f"[{self.bot_name}] Validation error: {str(e)}")
+            raise
+        except OSError as e:
+            logger.error(f"[{self.bot_name}] Database error: {str(e)}")
+            raise
         except Exception as e:
-            if "duplicate key error" in str(e) and "user_id" in str(e):
-                # Handle duplicate key error by cleaning up and retrying
-                try:
-                    # Clean up null user_id records
-                    await self.db_connection.users.delete_many({"user_id": None})
-                    
-                    # Try to find existing user
-                    user_doc = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
-                    if user_doc:
-                        user_dict = {
-                            "_id": user_doc.get("_id"),
-                            "telegram_user_id": user_doc.get("telegram_user_id"),
-                            "username": user_doc.get("username"),
-                            "first_name": user_doc.get("first_name"),
-                            "last_name": user_doc.get("last_name"),
-                            "language_code": user_doc.get("language_code"),
-                            "is_admin": user_doc.get("is_admin", False),
-                            "balance": user_doc.get("balance", 0.0),
-                            "tos_accepted": user_doc.get("tos_accepted"),
-                            "created_at": user_doc.get("created_at", datetime.utcnow()),
-                            "upload_count_today": user_doc.get("upload_count_today", 0),
-                            "last_upload_date": user_doc.get("last_upload_date")
-                        }
-                        return User(**user_dict)
-                    
-                    # If no user found, create new one directly
-                    new_user_doc = {
-                        "telegram_user_id": event.sender_id,
-                        "username": event.sender.username,
-                        "first_name": event.sender.first_name,
-                        "last_name": event.sender.last_name,
-                        "language_code": getattr(event.sender, 'lang_code', None),
-                        "is_admin": False,
-                        "balance": 0.0,
-                        "upload_count_today": 0,
-                        "created_at": datetime.utcnow(),
-                        "tos_accepted": None,
-                        "last_upload_date": None
-                    }
-                    
-                    result = await self.db_connection.users.insert_one(new_user_doc)
-                    new_user_doc["_id"] = result.inserted_id
-                    return User(**new_user_doc)
-                    
-                except Exception as retry_error:
-                    logger.error(f"[{self.bot_name}] Retry failed: {str(retry_error)}")
-            
-            logger.error(f"[{self.bot_name}] Failed to get/create user for {event.sender_id}: {str(e)}")
-            import traceback
-            logger.error(f"[{self.bot_name}] Traceback: {traceback.format_exc()}")
+            logger.error(f"[{self.bot_name}] Failed to get/create user for {event.sender_id}: {str(e)}", exc_info=True)
             
             try:
                 existing = await self.db_connection.users.find_one({"telegram_user_id": event.sender_id})
@@ -194,7 +139,7 @@ class BaseBot:
                         "is_admin": existing.get("is_admin", False),
                         "balance": existing.get("balance", 0.0),
                         "tos_accepted": existing.get("tos_accepted"),
-                        "created_at": existing.get("created_at", datetime.utcnow()),
+                        "created_at": existing.get("created_at", utc_now()),
                         "upload_count_today": existing.get("upload_count_today", 0),
                         "last_upload_date": existing.get("last_upload_date")
                     })
@@ -208,7 +153,7 @@ class BaseBot:
                     "is_admin": False,
                     "balance": 0.0,
                     "upload_count_today": 0,
-                    "created_at": datetime.utcnow(),
+                    "created_at": utc_now(),
                     "tos_accepted": None,
                     "last_upload_date": None
                 }
@@ -217,9 +162,9 @@ class BaseBot:
                 simple_user["_id"] = result.inserted_id
                 return User(**simple_user)
                 
-            except Exception as final_error:
-                logger.error(f"[{self.bot_name}] Final fallback failed: {str(final_error)}")
-                raise Exception(f"Failed to create or find user {event.sender_id}")
+            except (ValueError, OSError) as fallback_error:
+                logger.error(f"[{self.bot_name}] Fallback failed: {str(fallback_error)}")
+                raise ValueError(f"Failed to create or find user {event.sender_id}")
     
     async def send_message(self, chat_id: int, message: str, buttons=None):
         """Send message with optional buttons"""
@@ -228,8 +173,11 @@ class BaseBot:
             if buttons:
                 logger.info(f"[{self.bot_name}] Message includes {len(buttons)} button rows")
             return await self.client.send_message(chat_id, message, buttons=buttons)
-        except Exception as e:
+        except (ValueError, OSError) as e:
             logger.error(f"[{self.bot_name}] Failed to send message to {chat_id}: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"[{self.bot_name}] Unexpected error sending message: {str(e)}", exc_info=True)
             return None
     
     async def edit_message(self, event, message: str, buttons=None):
@@ -239,9 +187,13 @@ class BaseBot:
             if buttons:
                 logger.info(f"[{self.bot_name}] Edit includes {len(buttons)} button rows")
             await event.edit(message, buttons=buttons)
-        except Exception as e:
+        except ValueError as e:
             if "Content of the message was not modified" not in str(e):
-                logger.error(f"[{self.bot_name}] Failed to edit message for {event.sender_id}: {str(e)}")
+                logger.error(f"[{self.bot_name}] Validation error editing message: {str(e)}")
+        except OSError as e:
+            logger.error(f"[{self.bot_name}] Network error editing message: {str(e)}")
+        except Exception as e:
+            logger.error(f"[{self.bot_name}] Failed to edit message for {event.sender_id}: {str(e)}", exc_info=True)
     
     async def answer_callback(self, event, message: str = None, alert: bool = False):
         """Answer callback query"""
@@ -251,5 +203,7 @@ class BaseBot:
             if message:
                 logger.info(f"[{self.bot_name}] Callback answer: {message}")
             await event.answer(message, alert=alert)
+        except (ValueError, OSError) as e:
+            logger.debug(f"[{self.bot_name}] Failed to answer callback: {str(e)}")
         except Exception as e:
-            logger.debug(f"[{self.bot_name}] Failed to answer callback for {event.sender_id}: {str(e)}")
+            logger.debug(f"[{self.bot_name}] Unexpected error answering callback: {str(e)}")

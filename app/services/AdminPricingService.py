@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, Any, List
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class AdminPricingService:
                         'country': country,
                         'buy_price': buy_price,
                         'buy_price_set_by': admin_id,
-                        'buy_price_updated_at': datetime.utcnow()
+                        'buy_price_updated_at': utc_now()
                     }
                 },
                 upsert=True
@@ -45,7 +46,7 @@ class AdminPricingService:
                     '$set': {
                         'sell_price': sell_price,
                         'sell_price_set_by': admin_id,
-                        'sell_price_updated_at': datetime.utcnow()
+                        'sell_price_updated_at': utc_now()
                     }
                 },
                 upsert=True
@@ -79,7 +80,7 @@ class AdminPricingService:
                         'profit_margin': sell_price - buy_price,
                         'profit_percentage': ((sell_price - buy_price) / buy_price) * 100,
                         'updated_by': admin_id,
-                        'updated_at': datetime.utcnow()
+                        'updated_at': utc_now()
                     }
                 },
                 upsert=True
@@ -215,7 +216,7 @@ class AdminPricingService:
             recent_sales = await self.db.transactions.find({
                 'account_country': country,
                 'status': 'completed',
-                'created_at': {'$gte': datetime.utcnow().replace(day=1)}  # This month
+                'created_at': {'$gte': utc_now().replace(day=1)}  # This month
             }).to_list(None)
             
             # Base pricing by country

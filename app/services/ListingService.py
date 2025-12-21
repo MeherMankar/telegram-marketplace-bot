@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Any
 from app.models import SettingsManager
+from app.utils.datetime_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class ListingService:
                 "price": sell_price,
                 "currency": "INR",
                 "status": "active",
-                "created_at": datetime.utcnow(),
+                "created_at": utc_now(),
                 "views": 0,
                 "featured": False
             }
@@ -140,7 +141,7 @@ class ListingService:
                     "$set": {
                         "status": "reserved",
                         "reserved_by": buyer_id,
-                        "reserved_at": datetime.utcnow()
+                        "reserved_at": utc_now()
                     }
                 }
             )
@@ -177,7 +178,7 @@ class ListingService:
                     "$set": {
                         "status": "sold",
                         "buyer_id": buyer_id,
-                        "sold_at": datetime.utcnow(),
+                        "sold_at": utc_now(),
                         "sale_price": sale_price
                     }
                 }
@@ -289,7 +290,7 @@ class ListingService:
         try:
             await self.db_connection.listings.update_one(
                 {"_id": listing_id},
-                {"$set": {"price": new_price, "updated_at": datetime.utcnow()}}
+                {"$set": {"price": new_price, "updated_at": utc_now()}}
             )
             
             return {"success": True, "message": "Price updated"}
@@ -303,7 +304,7 @@ class ListingService:
         try:
             await self.db_connection.listings.update_one(
                 {"_id": listing_id},
-                {"$set": {"featured": featured, "updated_at": datetime.utcnow()}}
+                {"$set": {"featured": featured, "updated_at": utc_now()}}
             )
             
             action = "featured" if featured else "unfeatured"
