@@ -64,6 +64,7 @@ def create_admin_review_keyboard(account_id: str) -> List[List[Button]]:
         [Button.inline("✅ Approve", f"admin_approve_{account_id}"), Button.inline("❌ Reject", f"admin_reject_{account_id}")],
         [Button.inline("💰 Auto Price", f"auto_price_{account_id}"), Button.inline("🔍 Verify", f"admin_verify_{account_id}")],
         [Button.inline("📊 Quality Score", f"admin_quality_{account_id}"), Button.inline("🛡️ Security Check", f"admin_security_{account_id}")],
+        [Button.inline("🔐 Login Test", f"admin_login_{account_id}")],
         [Button.inline("🔙 Back to Queue", "review_accounts")]
     ]
 

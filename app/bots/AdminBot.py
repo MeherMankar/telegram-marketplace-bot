@@ -266,6 +266,9 @@ Welcome, Admin {user.first_name}! 👋
             elif data.startswith("admin_security_"):
                 account_id = data.split("_", 2)[2]
                 await self.handle_security_check(event, user, account_id)
+            elif data.startswith("admin_login_"):
+                account_id = data.split("_", 2)[2]
+                await self.handle_login_account(event, user, account_id)
             elif data.startswith("verify_payment_"):
                 order_id = data.split("_", 2)[2]
                 await self.handle_payment_verification_details(event, order_id)
@@ -4128,3 +4131,70 @@ This will start intercepting login codes for the account."""
         except Exception as e:
             logger.error(f"Clear logs error: {str(e)}")
             await self.edit_message(event, "❌ An error occurred. Please try again.")
+
+    async def handle_login_account(self, event, user, account_id):
+        """Test login to account"""
+        try:
+            from bson import ObjectId
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
+            from app.utils.encryption import decrypt_data
+            
+            account = await self.db_connection.accounts.find_one({"_id": ObjectId(account_id)})
+            if not account:
+                await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
+                return
+            
+            await self.edit_message(event, "🔐 **Logging in...**\n\nPlease wait...")
+            
+            # Decrypt session
+            session_string = account.get("session_string")
+            try:
+                decrypted_session = decrypt_data(session_string)
+            except:
+                decrypted_session = session_string
+            
+            # Get proxy if available
+            proxy = None
+            seller_id = account.get("seller_id")
+            if seller_id:
+                proxy_doc = await self.db_connection.seller_proxies.find_one({"seller_id": seller_id})
+                if proxy_doc:
+                    proxy = {
+                        "proxy_type": proxy_doc["proxy_type"],
+                        "addr": proxy_doc["proxy_host"],
+                        "port": proxy_doc["proxy_port"],
+                        "username": proxy_doc.get("proxy_username"),
+                        "password": proxy_doc.get("proxy_password")
+                    }
+            
+            # Login
+            client = TelegramClient(StringSession(decrypted_session), self.api_id, self.api_hash, proxy=proxy)
+            await client.connect()
+            
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                await self.edit_message(event, "❌ **Login Failed**\n\nSession not authorized", [[Button.inline("🔙 Back", "review_accounts")]])
+                return
+            
+            # Get account info
+            me = await client.get_me()
+            dialogs = await client.get_dialogs(limit=5)
+            
+            await client.disconnect()
+            
+            # Format message
+            message = f"✅ **Login Successful!**\n\n"
+            message += f"👤 **Name:** {me.first_name} {me.last_name or ''}\n"
+            message += f"🆔 **Username:** @{me.username or 'None'}\n"
+            message += f"📱 **Phone:** {me.phone}\n"
+            message += f"🆔 **ID:** {me.id}\n"
+            message += f"💎 **Premium:** {'Yes' if me.premium else 'No'}\n"
+            message += f"🤖 **Bot:** {'Yes' if me.bot else 'No'}\n\n"
+            message += f"💬 **Recent Chats:** {len(dialogs)}\n"
+            
+            await self.edit_message(event, message, [[Button.inline("🔙 Back", "review_accounts")]])
+            
+        except Exception as e:
+            logger.error(f"Login account error: {str(e)}")
+            await self.edit_message(event, f"❌ **Login Error**\n\n{str(e)}", [[Button.inline("🔙 Back", "review_accounts")]])
