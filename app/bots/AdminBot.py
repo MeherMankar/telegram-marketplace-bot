@@ -199,8 +199,28 @@ Welcome, Admin {user.first_name}! 👋
                 await self.handle_security_settings_detailed(event)
             elif data == "seller_settings":
                 await self.handle_seller_settings(event)
+            elif data.startswith("setting_seller_"):
+                setting_key = data.split("_", 2)[2]
+                await self.handle_toggle_seller_setting(event, user, setting_key)
+            elif data == "set_seller_max_uploads":
+                await self.handle_set_seller_max_uploads(event, user)
             elif data == "buyer_settings":
                 await self.handle_buyer_settings(event)
+            elif data.startswith("setting_buyer_"):
+                setting_key = data.split("_", 2)[2]
+                await self.handle_toggle_buyer_setting(event, user, setting_key)
+            elif data == "set_buyer_max_purchases":
+                await self.handle_set_buyer_max_purchases(event, user)
+            elif data == "logs_filter_error":
+                await self.handle_logs_filter(event, user, "ERROR")
+            elif data == "logs_filter_warning":
+                await self.handle_logs_filter(event, user, "WARNING")
+            elif data == "logs_filter_all":
+                await self.handle_logs_filter(event, user, None)
+            elif data == "logs_refresh":
+                await self.handle_view_logs(event)
+            elif data == "logs_clear":
+                await self.handle_clear_logs(event, user)
             elif data == "general_settings_detailed":
                 await self.handle_general_settings_detailed(event)
             elif data.startswith("setting_"):
@@ -873,11 +893,33 @@ Welcome, Admin {user.first_name}! 👋
     
     async def handle_view_logs(self, event):
         """Handle log viewing"""
-        await self.edit_message(
-            event,
-            "📝 **System Logs**\n\nLog viewing interface coming soon...",
-            [[Button.inline("🔙 Back", "back_to_main")]]
-        )
+        try:
+            # Get recent logs from database
+            logs = await self.db_connection.error_logs.find().sort("timestamp", -1).limit(20).to_list(20)
+            
+            if not logs:
+                message = "📝 **System Logs**\n\n✅ No logs found."
+            else:
+                message = f"📝 **System Logs** (Last 20)\n\n"
+                for log in logs:
+                    level = log.get('level', 'INFO')
+                    emoji = {'ERROR': '🔴', 'WARNING': '⚠️', 'INFO': 'ℹ️'}.get(level, 'ℹ️')
+                    timestamp = log.get('timestamp', utc_now()).strftime('%m/%d %H:%M')
+                    message_text = log.get('message', 'No message')[:50]
+                    message += f"{emoji} {timestamp} - {message_text}\n"
+            
+            buttons = [
+                [Button.inline("🔴 Errors Only", "logs_filter_error")],
+                [Button.inline("⚠️ Warnings", "logs_filter_warning"), Button.inline("ℹ️ All Logs", "logs_filter_all")],
+                [Button.inline("🔄 Refresh", "logs_refresh"), Button.inline("🗑️ Clear Logs", "logs_clear")],
+                [Button.inline("🔙 Back", "back_to_main")]
+            ]
+            
+            await self.edit_message(event, message, buttons)
+            
+        except Exception as e:
+            logger.error(f"View logs error: {str(e)}")
+            await self.edit_message(event, "❌ An error occurred. Please try again.")
     
     async def handle_verification_settings(self, event):
         """Handle verification settings management"""
@@ -1299,19 +1341,97 @@ Click to modify:
     
     async def handle_seller_settings(self, event):
         """Handle seller bot settings"""
-        await self.edit_message(
-            event,
-            "📤 **Seller Settings**\n\nSeller bot settings management coming soon...",
-            [[Button.inline("🔙 Back", "bot_settings")]]
-        )
+        try:
+            settings = await self.db_connection.admin_settings.find_one({"type": "seller_settings"})
+            if settings:
+                seller_settings = settings.get("settings", {})
+            else:
+                seller_settings = {
+                    "upload_enabled": True,
+                    "otp_upload_enabled": True,
+                    "tdata_upload_enabled": True,
+                    "max_daily_uploads": 10,
+                    "require_proxy": False,
+                    "auto_verify": True
+                }
+            
+            settings_message = f"""
+📤 **Seller Bot Settings**
+
+Configure seller bot features:
+
+📤 **Upload Enabled:** {'Yes' if seller_settings.get('upload_enabled', True) else 'No'}
+📱 **OTP Upload:** {'Enabled' if seller_settings.get('otp_upload_enabled', True) else 'Disabled'}
+📦 **TData Upload:** {'Enabled' if seller_settings.get('tdata_upload_enabled', True) else 'Disabled'}
+📊 **Max Daily Uploads:** {seller_settings.get('max_daily_uploads', 10)}
+🌐 **Require Proxy:** {'Yes' if seller_settings.get('require_proxy', False) else 'No'}
+🔍 **Auto Verify:** {'Enabled' if seller_settings.get('auto_verify', True) else 'Disabled'}
+
+Click to modify:
+            """
+            
+            buttons = [
+                [Button.inline(f"📤 Upload ({'On' if seller_settings.get('upload_enabled', True) else 'Off'})", "setting_seller_upload_enabled"),
+                 Button.inline(f"📱 OTP ({'On' if seller_settings.get('otp_upload_enabled', True) else 'Off'})", "setting_seller_otp_upload_enabled")],
+                [Button.inline(f"📦 TData ({'On' if seller_settings.get('tdata_upload_enabled', True) else 'Off'})", "setting_seller_tdata_upload_enabled"),
+                 Button.inline(f"📊 Max Uploads ({seller_settings.get('max_daily_uploads', 10)})", "set_seller_max_uploads")],
+                [Button.inline(f"🌐 Require Proxy ({'On' if seller_settings.get('require_proxy', False) else 'Off'})", "setting_seller_require_proxy"),
+                 Button.inline(f"🔍 Auto Verify ({'On' if seller_settings.get('auto_verify', True) else 'Off'})", "setting_seller_auto_verify")],
+                [Button.inline("🔙 Back", "bot_settings")]
+            ]
+            
+            await self.edit_message(event, settings_message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Seller settings handler error: {str(e)}")
+            await self.edit_message(event, "❌ An error occurred. Please try again.")
     
     async def handle_buyer_settings(self, event):
         """Handle buyer bot settings"""
-        await self.edit_message(
-            event,
-            "🛒 **Buyer Settings**\n\nBuyer bot settings management coming soon...",
-            [[Button.inline("🔙 Back", "bot_settings")]]
-        )
+        try:
+            settings = await self.db_connection.admin_settings.find_one({"type": "buyer_settings"})
+            if settings:
+                buyer_settings = settings.get("settings", {})
+            else:
+                buyer_settings = {
+                    "browse_enabled": True,
+                    "purchase_enabled": True,
+                    "preview_enabled": True,
+                    "max_purchases_per_day": 5,
+                    "require_balance": True,
+                    "instant_delivery": True
+                }
+            
+            settings_message = f"""
+🛒 **Buyer Bot Settings**
+
+Configure buyer bot features:
+
+🔍 **Browse Enabled:** {'Yes' if buyer_settings.get('browse_enabled', True) else 'No'}
+💰 **Purchase Enabled:** {'Yes' if buyer_settings.get('purchase_enabled', True) else 'No'}
+👁️ **Preview Enabled:** {'Yes' if buyer_settings.get('preview_enabled', True) else 'No'}
+📊 **Max Daily Purchases:** {buyer_settings.get('max_purchases_per_day', 5)}
+💳 **Require Balance:** {'Yes' if buyer_settings.get('require_balance', True) else 'No'}
+⚡ **Instant Delivery:** {'Enabled' if buyer_settings.get('instant_delivery', True) else 'Disabled'}
+
+Click to modify:
+            """
+            
+            buttons = [
+                [Button.inline(f"🔍 Browse ({'On' if buyer_settings.get('browse_enabled', True) else 'Off'})", "setting_buyer_browse_enabled"),
+                 Button.inline(f"💰 Purchase ({'On' if buyer_settings.get('purchase_enabled', True) else 'Off'})", "setting_buyer_purchase_enabled")],
+                [Button.inline(f"👁️ Preview ({'On' if buyer_settings.get('preview_enabled', True) else 'Off'})", "setting_buyer_preview_enabled"),
+                 Button.inline(f"📊 Max Purchases ({buyer_settings.get('max_purchases_per_day', 5)})", "set_buyer_max_purchases")],
+                [Button.inline(f"💳 Require Balance ({'On' if buyer_settings.get('require_balance', True) else 'Off'})", "setting_buyer_require_balance"),
+                 Button.inline(f"⚡ Instant Delivery ({'On' if buyer_settings.get('instant_delivery', True) else 'Off'})", "setting_buyer_instant_delivery")],
+                [Button.inline("🔙 Back", "bot_settings")]
+            ]
+            
+            await self.edit_message(event, settings_message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Buyer settings handler error: {str(e)}")
+            await self.edit_message(event, "❌ An error occurred. Please try again.")
     
     async def handle_general_settings_detailed(self, event):
         """Handle general settings management"""
@@ -3627,3 +3747,156 @@ This will start intercepting login codes for the account."""
         except Exception as e:
             logger.error(f"Interceptor stats error: {str(e)}")
             await self.send_message(event.chat_id, f"❌ Error: {str(e)}")
+
+    
+    async def handle_toggle_seller_setting(self, event, user, setting_key):
+        """Toggle seller setting"""
+        try:
+            settings = await self.db_connection.admin_settings.find_one({"type": "seller_settings"})
+            if settings:
+                seller_settings = settings.get("settings", {})
+            else:
+                seller_settings = {}
+            
+            # Toggle boolean setting
+            current = seller_settings.get(setting_key, True)
+            seller_settings[setting_key] = not current
+            
+            # Save
+            await self.db_connection.admin_settings.update_one(
+                {"type": "seller_settings"},
+                {"$set": {"settings": seller_settings, "updated_at": utc_now(), "updated_by": user.telegram_user_id}},
+                upsert=True
+            )
+            
+            await self.handle_seller_settings(event)
+            
+        except Exception as e:
+            logger.error(f"Toggle seller setting error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_set_seller_max_uploads(self, event, user):
+        """Set max daily uploads"""
+        try:
+            settings = await self.db_connection.admin_settings.find_one({"type": "seller_settings"})
+            if settings:
+                seller_settings = settings.get("settings", {})
+            else:
+                seller_settings = {}
+            
+            # Cycle through values: 5, 10, 20, 50, 100, unlimited
+            current = seller_settings.get("max_daily_uploads", 10)
+            new_value = {5: 10, 10: 20, 20: 50, 50: 100, 100: 999, 999: 5}.get(current, 10)
+            seller_settings["max_daily_uploads"] = new_value
+            
+            # Save
+            await self.db_connection.admin_settings.update_one(
+                {"type": "seller_settings"},
+                {"$set": {"settings": seller_settings, "updated_at": utc_now(), "updated_by": user.telegram_user_id}},
+                upsert=True
+            )
+            
+            await self.handle_seller_settings(event)
+            
+        except Exception as e:
+            logger.error(f"Set seller max uploads error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+
+    
+    async def handle_toggle_buyer_setting(self, event, user, setting_key):
+        """Toggle buyer setting"""
+        try:
+            settings = await self.db_connection.admin_settings.find_one({"type": "buyer_settings"})
+            if settings:
+                buyer_settings = settings.get("settings", {})
+            else:
+                buyer_settings = {}
+            
+            # Toggle boolean setting
+            current = buyer_settings.get(setting_key, True)
+            buyer_settings[setting_key] = not current
+            
+            # Save
+            await self.db_connection.admin_settings.update_one(
+                {"type": "buyer_settings"},
+                {"$set": {"settings": buyer_settings, "updated_at": utc_now(), "updated_by": user.telegram_user_id}},
+                upsert=True
+            )
+            
+            await self.handle_buyer_settings(event)
+            
+        except Exception as e:
+            logger.error(f"Toggle buyer setting error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+    
+    async def handle_set_buyer_max_purchases(self, event, user):
+        """Set max daily purchases"""
+        try:
+            settings = await self.db_connection.admin_settings.find_one({"type": "buyer_settings"})
+            if settings:
+                buyer_settings = settings.get("settings", {})
+            else:
+                buyer_settings = {}
+            
+            # Cycle through values: 1, 3, 5, 10, 20, unlimited
+            current = buyer_settings.get("max_purchases_per_day", 5)
+            new_value = {1: 3, 3: 5, 5: 10, 10: 20, 20: 999, 999: 1}.get(current, 5)
+            buyer_settings["max_purchases_per_day"] = new_value
+            
+            # Save
+            await self.db_connection.admin_settings.update_one(
+                {"type": "buyer_settings"},
+                {"$set": {"settings": buyer_settings, "updated_at": utc_now(), "updated_by": user.telegram_user_id}},
+                upsert=True
+            )
+            
+            await self.handle_buyer_settings(event)
+            
+        except Exception as e:
+            logger.error(f"Set buyer max purchases error: {e}")
+            await self.answer_callback(event, "❌ Error", alert=True)
+
+    async def handle_logs_filter(self, event, user, level):
+        """Filter logs by level"""
+        try:
+            query = {"level": level} if level else {}
+            logs = await self.db_connection.error_logs.find(query).sort("timestamp", -1).limit(20).to_list(20)
+            
+            if not logs:
+                message = f"📝 **System Logs** ({level or 'All'})\\n\\n✅ No logs found."
+            else:
+                message = f"📝 **System Logs** ({level or 'All'}) - Last 20\\n\\n"
+                for log in logs:
+                    log_level = log.get('level', 'INFO')
+                    emoji = {'ERROR': '🔴', 'WARNING': '⚠️', 'INFO': 'ℹ️'}.get(log_level, 'ℹ️')
+                    timestamp = log.get('timestamp', utc_now()).strftime('%m/%d %H:%M')
+                    message_text = log.get('message', 'No message')[:50]
+                    message += f"{emoji} {timestamp} - {message_text}\\n"
+            
+            buttons = [
+                [Button.inline("🔴 Errors Only", "logs_filter_error")],
+                [Button.inline("⚠️ Warnings", "logs_filter_warning"), Button.inline("ℹ️ All Logs", "logs_filter_all")],
+                [Button.inline("🔄 Refresh", "logs_refresh"), Button.inline("🗑️ Clear Logs", "logs_clear")],
+                [Button.inline("🔙 Back", "back_to_main")]
+            ]
+            
+            await self.edit_message(event, message, buttons)
+            
+        except Exception as e:
+            logger.error(f"Logs filter error: {str(e)}")
+            await self.edit_message(event, "❌ An error occurred. Please try again.")
+    
+    async def handle_clear_logs(self, event, user):
+        """Clear all logs"""
+        try:
+            result = await self.db_connection.error_logs.delete_many({})
+            
+            await self.edit_message(
+                event,
+                f"✅ **Logs Cleared**\\n\\n{result.deleted_count} log entries have been deleted.",
+                [[Button.inline("🔙 Back", "view_logs")]]
+            )
+            
+        except Exception as e:
+            logger.error(f"Clear logs error: {str(e)}")
+            await self.edit_message(event, "❌ An error occurred. Please try again.")
