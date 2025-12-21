@@ -31,6 +31,16 @@ class VerificationService:
             if not session_string:
                 return {"success": False, "error": "No session string provided"}
             
+            # Decrypt session if it's encrypted
+            try:
+                from app.utils.encryption import decrypt_data
+                decrypted_session = decrypt_data(session_string)
+                logger.info("Session decrypted successfully for verification")
+            except Exception as decrypt_error:
+                # If decryption fails, assume it's already decrypted
+                logger.warning(f"Session decryption failed, using as-is: {str(decrypt_error)}")
+                decrypted_session = session_string
+            
             # Get verification limits
             limits = await self.settings_manager.get_verification_limits()
             
@@ -65,7 +75,7 @@ class VerificationService:
             
             # Create client with proper API credentials and proxy
             client = TelegramClient(
-                StringSession(session_string),
+                StringSession(decrypted_session),
                 self.api_id,
                 self.api_hash,
                 proxy=proxy if proxy else None
