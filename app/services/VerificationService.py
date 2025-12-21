@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -14,6 +15,9 @@ class VerificationService:
     def __init__(self, db_connection):
         self.db_connection = db_connection
         self.settings_manager = SettingsManager(db_connection)
+        # Get API credentials from environment
+        self.api_id = int(os.getenv("API_ID", "0"))
+        self.api_hash = os.getenv("API_HASH", "")
     
     async def verify_account(self, account_data: dict) -> dict:
         """Run all verification checks on an account"""
@@ -34,8 +38,8 @@ class VerificationService:
                 "max_score": 0
             }
             
-            # Create client
-            client = TelegramClient(StringSession(session_string), 0, "")
+            # Create client with proper API credentials
+            client = TelegramClient(StringSession(session_string), self.api_id, self.api_hash)
             
             try:
                 await client.connect()

@@ -2538,6 +2538,7 @@ Click to modify:
     async def handle_verify_account(self, event, user, account_id):
         """Handle account verification"""
         from app.services.VerificationService import VerificationService
+        from app.utils.encryption import decrypt_session
         
         await self.edit_message(event, "🔍 **Running Verification**\n\nPlease wait...")
         
@@ -2547,8 +2548,22 @@ Click to modify:
                 await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
                 return
             
+            # Decrypt session string if encrypted
+            session_string = account.get("session_string")
+            if not session_string:
+                await self.edit_message(event, "❌ No session string found", [[Button.inline("🔙 Back", "review_accounts")]])
+                return
+            
+            # Try to decrypt if it's encrypted
+            try:
+                decrypted_session = decrypt_session(session_string)
+                account_data = {**account, "session_string": decrypted_session}
+            except:
+                # If decryption fails, assume it's already decrypted
+                account_data = account
+            
             verification_service = VerificationService(self.db_connection)
-            results = await verification_service.verify_account(account)
+            results = await verification_service.verify_account(account_data)
             
             if results.get("success"):
                 score = results.get("score_percentage", 0)
@@ -2599,12 +2614,21 @@ Click to modify:
                 await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
                 return
             
+            checks = account.get("checks", {})
+            
+            # Check if verification has been run
+            if not checks:
+                await self.edit_message(
+                    event,
+                    "⚠️ **No Verification Data**\n\nThis account hasn't been verified yet.\n\nPlease run 'Account Verification' first to generate quality data.",
+                    [[Button.inline("🔍 Run Verification", f"admin_verify_{account_id}")], [Button.inline("🔙 Back", "review_accounts")]]
+                )
+                return
+            
             # Use quality_score from account if available, otherwise calculate from checks
             if account.get("quality_score") is not None:
-                quality_score = account.get("quality_score", 0)
-                quality_percentage = quality_score
+                quality_percentage = account.get("quality_score", 0)
             else:
-                checks = account.get("checks", {})
                 quality_score = 0
                 max_quality = 100
                 
@@ -2649,7 +2673,6 @@ Click to modify:
                 grade = "D (Poor)"
                 emoji = "❌"
             
-            checks = account.get("checks", {})
             message = f"{emoji} **Quality Score Report**\n\n"
             message += f"**Overall Score:** {quality_percentage:.0f}/100\n"
             message += f"**Grade:** {grade}\n\n"
@@ -2676,59 +2699,72 @@ Click to modify:
                 await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
                 return
             
-            # Use actual account data, not cached checks
+            checks = account.get("checks", {})
+            
+            # Check if verification has been run
+            if not checks:
+                await self.edit_message(
+                    event,
+                    "⚠️ **No Verification Data**\n\nThis account hasn't been verified yet.\n\nPlease run 'Account Verification' first to generate security data.",
+                    [[Button.inline("🔍 Run Verification", f"admin_verify_{account_id}")], [Button.inline("🔙 Back", "review_accounts")]]
+                )
+                return
+            
             security_issues = []
             security_warnings = []
             security_passed = []
             
-            # Check spam status from account field
-            spam_status = account.get("spam_status", "unknown")
-            if spam_status == "restricted" or spam_status == "spam":
-                security_issues.append("❌ Account is spam-restricted")
-            elif spam_status == "clean" or spam_status == "ok":
-                security_passed.append("✅ No spam restrictions")
-            else:
-                # Check from checks if available
-                checks = account.get("checks", {})
-                if not checks.get("spam_status", {}).get("passed", True):
+            # Check spam status
+            spam_check = checks.get("spam_status", {})
+            if spam_check:
+                if not spam_check.get("passed", True):
                     security_issues.append("❌ Account is spam-restricted")
                 else:
                     security_passed.append("✅ No spam restrictions")
+            else:
+                security_passed.append("✅ No spam restrictions (not checked)")
             
-            # Check 2FA from account field
-            has_2fa = account.get("has_2fa", False)
-            if not has_2fa:
+            # Check 2FA
+            twofa_check = checks.get("two_factor_auth", {})
+            if twofa_check:
+                if not twofa_check.get("passed", False):
+                    security_warnings.append("⚠️ 2FA not enabled")
+                else:
+                    security_passed.append("✅ 2FA enabled")
+            else:
                 security_warnings.append("⚠️ 2FA not enabled")
-            else:
-                security_passed.append("✅ 2FA enabled")
             
-            # Check contact count from account field
-            contact_count = account.get("contact_count", 0)
-            if contact_count > 10:
-                security_warnings.append(f"⚠️ High contact count: {contact_count}")
+            # Check contact count
+            contacts = checks.get("contact_count", {})
+            contact_value = contacts.get("value", 0)
+            if contact_value > 10:
+                security_warnings.append(f"⚠️ High contact count: {contact_value}")
             else:
-                security_passed.append(f"✅ Contact count: {contact_count}")
+                security_passed.append(f"✅ Contact count: {contact_value}")
             
-            # Check owned groups from account field
-            owned_groups = account.get("owned_groups_count", 0)
-            if owned_groups > 5:
-                security_warnings.append(f"⚠️ Owns {owned_groups} groups/channels")
+            # Check owned groups
+            owned = checks.get("owned_groups", {})
+            owned_value = owned.get("value", 0)
+            if owned_value > 5:
+                security_warnings.append(f"⚠️ Owns {owned_value} groups/channels")
             else:
-                security_passed.append(f"✅ Owned groups: {owned_groups}")
+                security_passed.append(f"✅ Owned groups: {owned_value}")
             
-            # Check bot interactions from account field
-            bot_chats = account.get("bot_chats_count", 0)
-            if bot_chats > 5:
-                security_warnings.append(f"⚠️ Many bot interactions: {bot_chats}")
+            # Check bot interactions
+            bots = checks.get("bot_chats", {})
+            bot_value = bots.get("value", 0)
+            if bot_value > 5:
+                security_warnings.append(f"⚠️ Many bot interactions: {bot_value}")
             else:
-                security_passed.append(f"✅ Bot chats: {bot_chats}")
+                security_passed.append(f"✅ Bot chats: {bot_value}")
             
-            # Active sessions - assume 1 if not specified
-            active_sessions = account.get("active_sessions_count", 1)
-            if active_sessions > 2:
-                security_warnings.append(f"⚠️ Multiple active sessions: {active_sessions}")
+            # Check active sessions
+            sessions = checks.get("active_sessions", {})
+            session_value = sessions.get("value", 1)
+            if session_value > 2:
+                security_warnings.append(f"⚠️ Multiple active sessions: {session_value}")
             else:
-                security_passed.append(f"✅ Active sessions: {active_sessions}")
+                security_passed.append(f"✅ Active sessions: {session_value}")
             
             # Determine overall security level
             if len(security_issues) > 0:
@@ -2750,7 +2786,7 @@ Click to modify:
                 message += "**Warnings:**\n" + "\n".join(security_warnings) + "\n\n"
             
             if security_passed:
-                message += "**Passed Checks:**\n" + "\n".join(security_passed[:5])
+                message += "**Passed Checks:**\n" + "\n".join(security_passed)
             
             await self.edit_message(event, message, [[Button.inline("🔙 Back", "review_accounts")]])
             
