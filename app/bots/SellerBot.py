@@ -1213,8 +1213,28 @@ Send your phone number:
                     {"$set": {"spam_check_result": spam_status, "updated_at": utc_now()}}
                 )
             
-            # 3. Run full verification (30+ checks)
-            verification_result = await self.verification_service.verify_account(account_doc)
+            # Get proxy if account uses one
+            proxy = None
+            if account_doc.get("uses_proxy") and account_doc.get("proxy_host"):
+                seller_id = account_doc.get("seller_id")
+                proxy_host = account_doc.get("proxy_host")
+                if seller_id and proxy_host:
+                    proxy_doc = await self.db_connection.seller_proxies.find_one({
+                        "seller_id": seller_id,
+                        "proxy_host": proxy_host
+                    })
+                    if proxy_doc:
+                        proxy = {
+                            "proxy_type": proxy_doc["proxy_type"],
+                            "addr": proxy_doc["proxy_host"],
+                            "port": proxy_doc["proxy_port"],
+                            "username": proxy_doc.get("proxy_username"),
+                            "password": proxy_doc.get("proxy_password")
+                        }
+                        logger.info(f"Using seller proxy for verification: {proxy['addr']}:{proxy['port']}")
+            
+            # 3. Run full verification (30+ checks) with proxy
+            verification_result = await self.verification_service.verify_account(account_doc, proxy)
             
             # Save verification results
             await self.db_connection.accounts.update_one(

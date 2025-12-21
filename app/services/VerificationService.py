@@ -19,8 +19,13 @@ class VerificationService:
         self.api_id = int(os.getenv("API_ID", "0"))
         self.api_hash = os.getenv("API_HASH", "")
     
-    async def verify_account(self, account_data: dict) -> dict:
-        """Run all verification checks on an account"""
+    async def verify_account(self, account_data: dict, proxy: dict = None) -> dict:
+        """Run all verification checks on an account
+        
+        Args:
+            account_data: Account data dictionary
+            proxy: Optional proxy dict with keys: proxy_type, addr, port, username, password
+        """
         try:
             session_string = account_data.get("session_string")
             if not session_string:
@@ -38,8 +43,33 @@ class VerificationService:
                 "max_score": 0
             }
             
-            # Create client with proper API credentials
-            client = TelegramClient(StringSession(session_string), self.api_id, self.api_hash)
+            # Get proxy if not provided
+            if not proxy and account_data.get("uses_proxy") and account_data.get("proxy_host"):
+                # Retrieve proxy from seller_proxies
+                seller_id = account_data.get("seller_id")
+                proxy_host = account_data.get("proxy_host")
+                if seller_id and proxy_host:
+                    proxy_doc = await self.db_connection.seller_proxies.find_one({
+                        "seller_id": seller_id,
+                        "proxy_host": proxy_host
+                    })
+                    if proxy_doc:
+                        proxy = {
+                            "proxy_type": proxy_doc["proxy_type"],
+                            "addr": proxy_doc["proxy_host"],
+                            "port": proxy_doc["proxy_port"],
+                            "username": proxy_doc.get("proxy_username"),
+                            "password": proxy_doc.get("proxy_password")
+                        }
+                        logger.info(f"Using seller proxy for verification: {proxy['addr']}:{proxy['port']}")
+            
+            # Create client with proper API credentials and proxy
+            client = TelegramClient(
+                StringSession(session_string),
+                self.api_id,
+                self.api_hash,
+                proxy=proxy if proxy else None
+            )
             
             try:
                 await client.connect()
