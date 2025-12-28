@@ -79,6 +79,7 @@ class DatabaseConnection:
         self.bot_settings = self.db.bot_settings
         self.proxy_settings = self.db.proxy_settings
         self.seller_proxies = self.db.seller_proxies
+        self.proxies = self.db.proxies
         
         await self._create_indexes()
     

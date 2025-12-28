@@ -742,41 +742,27 @@ Send your phone number:
             seller_proxy = None
             user_doc = await self.db_connection.users.find_one({"telegram_user_id": user_id})
             
-            # Only use proxy if not skipped and proxy exists
-            if user_doc and not user_doc.get("skip_proxy"):
-                # Check if temp_proxy_host exists (just added)
-                if user_doc.get("temp_proxy_host"):
-                    proxy_doc = await self.db_connection.seller_proxies.find_one({
-                        "seller_id": user_id,
-                        "proxy_host": user_doc["temp_proxy_host"]
-                    })
-                    if proxy_doc:
-                        seller_proxy = {
-                            "proxy_type": proxy_doc["proxy_type"],
-                            "addr": proxy_doc["proxy_host"],
-                            "port": proxy_doc["proxy_port"],
-                            "username": proxy_doc.get("proxy_username"),
-                            "password": proxy_doc.get("proxy_password")
-                        }
-                        logger.info(f"[SELLER] Using seller proxy: {seller_proxy['addr']}:{seller_proxy['port']}")
-                # Also check if user has any existing proxy
-                elif not seller_proxy:
-                    proxy_doc = await self.db_connection.seller_proxies.find_one({"seller_id": user_id})
-                    if proxy_doc:
-                        seller_proxy = {
-                            "proxy_type": proxy_doc["proxy_type"],
-                            "addr": proxy_doc["proxy_host"],
-                            "port": proxy_doc["proxy_port"],
-                            "username": proxy_doc.get("proxy_username"),
-                            "password": proxy_doc.get("proxy_password")
-                        }
-                        logger.info(f"[SELLER] Using existing seller proxy: {seller_proxy['addr']}:{seller_proxy['port']}")
+            # Check if temp_proxy_host exists (just added)
+            if user_doc and user_doc.get("temp_proxy_host") and not user_doc.get("skip_proxy"):
+                proxy_doc = await self.db_connection.seller_proxies.find_one({
+                    "seller_id": user_id,
+                    "proxy_host": user_doc["temp_proxy_host"]
+                })
+                if proxy_doc:
+                    seller_proxy = {
+                        "proxy_type": proxy_doc["proxy_type"],
+                        "addr": proxy_doc["proxy_host"],
+                        "port": proxy_doc["proxy_port"],
+                        "username": proxy_doc.get("proxy_username"),
+                        "password": proxy_doc.get("proxy_password")
+                    }
+                    logger.info(f"[SELLER] Using seller proxy: {seller_proxy['addr']}:{seller_proxy['port']}")
             
             # Use shared OTP service instance with seller proxy
             print(f"[SELLER] Calling OTP service with proxy={'Yes' if seller_proxy else 'None'}...")
             if seller_proxy:
                 logger.info(f"[SELLER] Proxy details: {seller_proxy['proxy_type']}://{seller_proxy['addr']}:{seller_proxy['port']}")
-            logger.info(f"Calling verify_account_ownership for {phone_number} with proxy={'Yes' if seller_proxy else 'None'}")
+            logger.info(f"Calling verify_account_ownership for {phone_number} with proxy={seller_proxy['addr'] if seller_proxy else 'None'}")
             otp_result = await self.otp_service.verify_account_ownership(phone_number, user_id, seller_proxy)
             print(f"[SELLER] OTP result: {otp_result.get('success')}")
             logger.info(f"[SELLER] OTP result: {otp_result}")

@@ -70,7 +70,25 @@ class OtpService:
                 app_version=device["version"]
             )
             
-            await client.connect()
+            try:
+                await client.connect()
+            except Exception as connect_exc:
+                # Log detailed connection information to help diagnose timeouts
+                proxy_info = None
+                if proxy:
+                    proxy_info = f"{proxy.get('addr') or proxy.get('host')}:{proxy.get('port')} (type={proxy.get('type')})"
+                logger.error(
+                    f"Failed to connect TelegramClient for OTP (phone={phone_number}, user={user_id}, api_id={self.api_id}) "
+                    f"proxy={proxy_info}: {connect_exc}"
+                )
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                return {
+                    'success': False,
+                    'error': f'Connection failed: {str(connect_exc)}'
+                }
             
             # Send code request
             sent_code = await client.send_code_request(phone_number)

